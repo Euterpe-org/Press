@@ -51,7 +51,7 @@ use crate::preview::Preview;
 use crate::theme::space;
 use crate::timeline::Change;
 use crate::workspace::Workspace;
-use crate::{fonts, theme};
+use crate::{crop, fonts, theme};
 
 /// Height of the action bar's contents. Reserved before the body is measured.
 ///
@@ -134,6 +134,9 @@ struct Inspect {
     preview: Option<Preview>,
     /// Where the scrubber is, in seconds.
     at: f64,
+    /// The shape the charter asked for, if they asked. An OFFER, never applied
+    /// on Press's own initiative -- the gate has no opinion about shape.
+    crop: Option<crop::Choice>,
     /// Which part of the source survives. Untouched by default: the opening is
     /// never moved unless the charter moves it.
     trim: Trim,
@@ -168,6 +171,9 @@ struct Bench {
     source_facts: Facts,
     /// Carried from the scrubber. Applied by Phase B, because it needs `-ss`.
     opening_cut: f64,
+    /// Carried the same way, and for the same reason: a crop rewrites the
+    /// picture, so it happens inside the one encode that does everything else.
+    crop: Option<crop::Choice>,
     /// Phase A's output. **Every** Phase B run encodes from this and never from
     /// a previous Phase B result -- that would be a second generation of loss
     /// for no gain.
@@ -208,16 +214,38 @@ impl Bench {
         }
     }
 
-    /// What is still wrong. Empty means the file is uploadable as it stands.
+    /// The crop window this choice makes on the material, once resolved.
+    ///
+    /// `None` after an encode: it has already been applied, and a request that
+    /// has been carried out is not still pending.
+    fn crop_window(&self) -> Option<crop::Window> {
+        if self.encoded.is_some() {
+            return None;
+        }
+        let facts = &self.material.facts;
+        self.crop
+            .and_then(|choice| choice.window((facts.width, facts.height)))
+    }
+
+    /// Everything the next encode would do. Not all of it is a fault.
     fn pending(&self) -> Vec<Pending> {
         let (_, bytes, facts) = self.have();
-        // The opening cut counts as outstanding until an encode has applied it.
+        // A request counts as outstanding until an encode has carried it out.
         let cut = if self.encoded.is_some() {
             0.0
         } else {
             self.opening_cut
         };
-        phase_b::pending(facts, bytes, cut)
+        phase_b::pending(facts, bytes, cut, self.crop_window())
+    }
+
+    /// Whether anything stands between this file and an upload.
+    ///
+    /// A crop and an opening cut do not: the file is uploadable without them
+    /// and merely is not yet what was asked for. Counting them as faults put
+    /// "not ready to upload" over a file that was perfectly ready.
+    fn blocked(&self) -> bool {
+        self.pending().iter().any(Pending::is_a_problem)
     }
 
     /// Whether pressing the button again could change anything.
@@ -228,7 +256,12 @@ impl Bench {
         if self.encoded.is_some() {
             return None;
         }
-        phase_b::aim(&self.material.facts, self.material.bytes, self.opening_cut)
+        phase_b::aim(
+            &self.material.facts,
+            self.material.bytes,
+            self.opening_cut,
+            self.crop_window(),
+        )
     }
 }
 
@@ -432,7 +465,8 @@ impl Press {
                 });
             }
             Stage::Bench(bench) => {
-                let ready = bench.pending().is_empty();
+                let ready = !bench.blocked();
+                let has_work = !bench.pending().is_empty();
                 let runnable = bench.worth_running();
                 let stuck = matches!(bench.said, Some(Said::StillTooLarge { .. }));
                 let saved = bench.saved.clone();
@@ -494,10 +528,14 @@ impl Press {
                     // same answer. The way out is a shorter video.
                     let offer_run = runnable.is_some() && !stuck;
                     if offer_run {
-                        let label = if ready {
-                            text::SHRINK_FURTHER.get(lang)
-                        } else {
+                        // "Make it smaller" only when that is genuinely all
+                        // there is left to do. With a crop or an opening cut
+                        // outstanding there is real work queued, and calling it
+                        // "make it smaller" describes none of it.
+                        let label = if has_work {
                             text::START.get(lang)
+                        } else {
+                            text::SHRINK_FURTHER.get(lang)
                         };
                         if theme::primary(ui, label).clicked() {
                             pressed = Some(Act::Run);
@@ -630,6 +668,7 @@ impl Press {
             facts,
             preview,
             at: 0.0,
+            crop: None,
             trim: Trim::default(),
         }));
     }
@@ -711,6 +750,7 @@ impl Press {
             source_bytes: inspect.bytes,
             source_facts: facts.clone(),
             trim: inspect.trim,
+            crop: inspect.crop,
             material: None,
             encoded: None,
         };
@@ -789,6 +829,7 @@ impl Press {
         let bench = *bench;
         let opening_cut = bench.opening_cut;
         let work = Arc::clone(&bench.work);
+        let window = bench.crop_window();
 
         // The worker gets its own copy. `Material` is a path and some numbers,
         // so this costs nothing and it means no lifetime has to cross a thread
@@ -807,6 +848,7 @@ impl Press {
                     &material,
                     aim,
                     opening_cut,
+                    window,
                     &work,
                     &cancel,
                     |step| {
@@ -834,6 +876,7 @@ impl Press {
                     cut_opening: opening_cut,
                     keep_until: None,
                 },
+                crop: bench.crop,
                 material: Some(bench.material),
                 encoded: bench.encoded,
             },
@@ -876,6 +919,7 @@ impl Press {
             source_bytes: working.held.source_bytes,
             source_facts: working.held.source_facts,
             opening_cut: working.held.trim.cut_opening,
+            crop: working.held.crop,
             material,
             encoded: working.held.encoded,
             said,
@@ -940,6 +984,7 @@ impl Press {
             working.held.source_bytes,
             working.held.source_facts,
             working.held.trim,
+            working.held.crop,
         );
     }
 
@@ -958,10 +1003,18 @@ impl Press {
                 cut_opening: bench.opening_cut,
                 keep_until: None,
             },
+            bench.crop,
         );
     }
 
-    fn reopen(&mut self, source: PathBuf, bytes: u64, facts: Facts, trim: Trim) {
+    fn reopen(
+        &mut self,
+        source: PathBuf,
+        bytes: u64,
+        facts: Facts,
+        trim: Trim,
+        crop: Option<crop::Choice>,
+    ) {
         let preview = self.ffmpeg.as_ref().map(|ffmpeg| {
             let preview = Preview::open(
                 ffmpeg.binary(),
@@ -981,6 +1034,7 @@ impl Press {
             facts: Some(facts),
             preview,
             at: 0.0,
+            crop,
             trim,
         }));
     }
@@ -994,6 +1048,7 @@ struct Held {
     source_bytes: u64,
     source_facts: Facts,
     trim: Trim,
+    crop: Option<crop::Choice>,
     /// Phase A's output. `None` only while Phase A is still producing it.
     material: Option<Box<Material>>,
     /// The best Phase B result so far, kept across a run that does worse.
@@ -1152,9 +1207,13 @@ impl Press {
         region(ui, "the workbench", workbench, |ui| {
             workbench_column(ui, lang, loaded, texture.as_ref());
         });
+        let mut picked = None;
         region(ui, "the readout", readout, |ui| {
-            verdict_card(ui, lang, loaded, no_encoder);
+            picked = verdict_card(ui, lang, loaded, no_encoder);
         });
+        if let Some(choice) = picked {
+            loaded.crop = choice;
+        }
     }
 
     fn refresh_texture(&mut self, ctx: &egui::Context) {
@@ -1293,6 +1352,7 @@ impl Press {
             return;
         };
         let pending = bench.pending();
+        let blocked = bench.blocked();
         let (_, bytes, facts) = bench.have();
 
         centred(ui, "bench", |ui| {
@@ -1315,16 +1375,15 @@ impl Press {
                 theme::muted(ui, &file_name(&bench.source));
                 ui.add_space(space::BLOCK);
 
-                let (hero, colour) =
-                    match (&bench.said, bench.encoded.is_some(), pending.is_empty()) {
-                        (Some(Said::Failed(_)), ..) => (text::FAILED.get(lang), theme::ALARM),
-                        (Some(Said::StillTooLarge { .. }), ..) => {
-                            (text::STILL_TOO_LARGE.get(lang), theme::NOTICE)
-                        }
-                        (_, true, true) => (text::BENCH_COMPRESSED.get(lang), theme::GOOD),
-                        (_, _, true) => (text::BENCH_READY.get(lang), theme::GOOD),
-                        (_, _, false) => (text::NOT_READY.get(lang), theme::NOTICE),
-                    };
+                let (hero, colour) = match (&bench.said, bench.encoded.is_some(), blocked) {
+                    (Some(Said::Failed(_)), ..) => (text::FAILED.get(lang), theme::ALARM),
+                    (Some(Said::StillTooLarge { .. }), ..) => {
+                        (text::STILL_TOO_LARGE.get(lang), theme::NOTICE)
+                    }
+                    (_, true, false) => (text::BENCH_COMPRESSED.get(lang), theme::GOOD),
+                    (_, _, false) => (text::BENCH_READY.get(lang), theme::GOOD),
+                    (_, _, true) => (text::NOT_READY.get(lang), theme::NOTICE),
+                };
                 theme::heading(ui, hero, colour);
                 ui.add_space(space::TIGHT);
 
@@ -1343,7 +1402,7 @@ impl Press {
                             ),
                         theme::INK,
                     ),
-                    _ if !pending.is_empty() => {
+                    _ if blocked => {
                         // What is wrong, in as few words as carry it. The
                         // numbers are on the specification line below.
                         theme::line(ui, &wrong_line(&pending, lang), theme::INK);
@@ -1480,12 +1539,16 @@ fn did_line(bench: &Bench, lang: Lang) -> Option<String> {
 fn wrong_line(pending: &[Pending], lang: Lang) -> String {
     pending
         .iter()
+        .filter(|item| item.is_a_problem())
         .map(|item| match item {
             Pending::Scale { .. } => text::SHORT_RESOLUTION.get(lang),
             Pending::FrameRate { .. } => text::SHORT_FPS.get(lang),
             Pending::Codec { .. } => text::SHORT_CODEC.get(lang),
             Pending::OpeningCut { .. } => text::SHORT_OPENING.get(lang),
             Pending::TooLarge { .. } => text::SHORT_SIZE.get(lang),
+            // Never reached: a request is not a fault, and `wrong_line` is
+            // built from the faults alone.
+            Pending::Crop { .. } => text::SHORT_CROP.get(lang),
         })
         .collect::<Vec<_>>()
         .join(text::LIST_SEP.get(lang))
@@ -1510,6 +1573,10 @@ fn will_line(pending: &[Pending], lang: Lang) -> String {
             Pending::TooLarge { limit, .. } => text::WILL_SIZE
                 .get(lang)
                 .replace("{limit}", &limit.div_ceil(1024 * 1024).to_string()),
+            Pending::Crop { to } => text::WILL_CROP
+                .get(lang)
+                .replace("{width}", &to.0.to_string())
+                .replace("{height}", &to.1.to_string()),
         })
         .collect();
     text::WILL_LEAD
@@ -1679,9 +1746,15 @@ fn workbench_column(
         egui::pos2(column.right(), controls.top() - space::ROW),
     );
 
+    let source = loaded
+        .facts
+        .as_ref()
+        .map_or((0, 0), |facts| (facts.width, facts.height));
+    let mut crop = loaded.crop;
     region(ui, "the viewport", glass, |ui| {
-        viewport(ui, texture, glass.size())
+        viewport(ui, texture, glass.size(), source, &mut crop);
     });
+    loaded.crop = crop;
     region(ui, "the transport", controls, |ui| {
         transport(ui, lang, loaded)
     });
@@ -1694,8 +1767,22 @@ fn workbench_column(
 /// deliberate viewport and leftover space: a 4:3 source in a 16:9 column leaves
 /// bars either way, and bars inside a drawn frame read as a viewport while the
 /// same bars against the page read as a layout that did not work out.
-fn viewport(ui: &mut egui::Ui, texture: Option<&egui::TextureHandle>, room: egui::Vec2) {
-    let (rect, _) = ui.allocate_exact_size(room, egui::Sense::hover());
+fn viewport(
+    ui: &mut egui::Ui,
+    texture: Option<&egui::TextureHandle>,
+    room: egui::Vec2,
+    source: (u32, u32),
+    crop: &mut Option<crop::Choice>,
+) {
+    // Sensing a drag ONLY while a crop is chosen. With none set there is nothing
+    // to move, and a picture that reacts to being dragged while doing nothing is
+    // worse than one that does not react at all.
+    let sense = if crop.is_some() {
+        egui::Sense::click_and_drag()
+    } else {
+        egui::Sense::hover()
+    };
+    let (rect, response) = ui.allocate_exact_size(room, sense);
     ui.painter().rect(
         rect,
         egui::CornerRadius::same(theme::RADIUS),
@@ -1713,9 +1800,77 @@ fn viewport(ui: &mut egui::Ui, texture: Option<&egui::TextureHandle>, room: egui
     let inner = rect.shrink(1.0);
     let scale = (inner.width() / w).min(inner.height() / h);
     let drawn = egui::vec2(w * scale, h * scale);
+    let shown = egui::Rect::from_center_size(rect.center(), drawn);
     egui::Image::new(texture)
         .corner_radius(egui::CornerRadius::same(theme::RADIUS - 1))
-        .paint_at(ui, egui::Rect::from_center_size(rect.center(), drawn));
+        .paint_at(ui, shown);
+
+    // ── the crop, shown on the picture it is a crop of ────────────────
+    let Some(choice) = *crop else {
+        return;
+    };
+    let Some(window) = choice.window(source) else {
+        return;
+    };
+
+    // Dragging moves the window along its ONE free axis. The other dimension is
+    // already exactly the shape that was asked for, so allowing it to move would
+    // only let the charter undo the thing they chose.
+    // Measured in SOURCE pixels mapped onto the shown rectangle, not in the
+    // preview texture's own pixels: the window is expressed in the source's
+    // coordinates and the preview is a rounded-to-even approximation of them.
+    let (sw, sh) = (source.0.max(1) as f32, source.1.max(1) as f32);
+    if response.dragged() {
+        let by = response.drag_delta();
+        let (moved, room) = match choice.along(source) {
+            // Dragging the picture right shows what was to its LEFT, so the
+            // window travels the other way. This is panning, not scrubbing.
+            crop::Along::Horizontal => (-by.x, shown.width() * (sw - window.width as f32) / sw),
+            crop::Along::Vertical => (-by.y, shown.height() * (sh - window.height as f32) / sh),
+        };
+        if room > 0.5 {
+            crop.as_mut().expect("chosen").offset = (choice.offset + moved / room).clamp(0.0, 1.0);
+        }
+    }
+    if response.hovered() || response.dragged() {
+        ui.ctx().set_cursor_icon(match choice.along(source) {
+            crop::Along::Horizontal => egui::CursorIcon::ResizeHorizontal,
+            crop::Along::Vertical => egui::CursorIcon::ResizeVertical,
+        });
+    }
+
+    // What SURVIVES is drawn plainly and what goes is dimmed, rather than the
+    // other way round: the question the charter is answering is "what is left",
+    // and an outline alone leaves them measuring by eye which side of it wins.
+    let kept = egui::Rect::from_min_size(
+        shown.min
+            + egui::vec2(
+                shown.width() * window.x as f32 / sw,
+                shown.height() * window.y as f32 / sh,
+            ),
+        egui::vec2(
+            shown.width() * window.width as f32 / sw,
+            shown.height() * window.height as f32 / sh,
+        ),
+    );
+    let veil = egui::Color32::from_black_alpha(150);
+    let painter = ui.painter();
+    for gone in [
+        egui::Rect::from_min_max(shown.min, egui::pos2(shown.right(), kept.top())),
+        egui::Rect::from_min_max(egui::pos2(shown.left(), kept.bottom()), shown.max),
+        egui::Rect::from_min_max(shown.min, egui::pos2(kept.left(), shown.bottom())),
+        egui::Rect::from_min_max(egui::pos2(kept.right(), shown.top()), shown.max),
+    ] {
+        if gone.is_positive() {
+            painter.rect_filled(gone, 0, veil);
+        }
+    }
+    painter.rect_stroke(
+        kept,
+        0,
+        egui::Stroke::new(1.5, theme::ACCENT),
+        egui::StrokeKind::Inside,
+    );
 }
 
 /// Transport, timeline and what the trim currently means. Written bottom-up so
@@ -1825,8 +1980,17 @@ fn transport(ui: &mut egui::Ui, lang: Lang, loaded: &mut Inspect) {
 }
 
 /// The findings, and what is about to be done about each of them.
-fn verdict_card(ui: &mut egui::Ui, lang: Lang, loaded: &Inspect, no_encoder: bool) {
+fn verdict_card(
+    ui: &mut egui::Ui,
+    lang: Lang,
+    loaded: &Inspect,
+    no_encoder: bool,
+) -> Option<Option<crop::Choice>> {
     let opening = loaded.trim.cut_opening;
+    let chose = loaded.crop;
+    // Handed back rather than written here, so the card keeps its shared
+    // reference and the caller owns every change to the stage.
+    let mut picked = None;
     // Sized to its contents, not stretched to the column.
     //
     // It used to fill the column, on the reasoning that "a card that stops
@@ -1844,6 +2008,7 @@ fn verdict_card(ui: &mut egui::Ui, lang: Lang, loaded: &Inspect, no_encoder: boo
 
         let Some(facts) = &loaded.facts else {
             theme::heading(ui, text::VERDICT_UNREADABLE.get(lang), theme::ALARM);
+            // Nothing readable, so nothing to offer a crop of.
             return;
         };
 
@@ -1880,6 +2045,51 @@ fn verdict_card(ui: &mut egui::Ui, lang: Lang, loaded: &Inspect, no_encoder: boo
             });
         }
 
+        // ── the shape, which is an OFFER ──────────────────────────────
+        //
+        // Never a finding, and never in the list above it: the gate checks a
+        // pixel COUNT and has no opinion about shape, so a 4:3 background video
+        // is accepted and will play. It simply will not fill the screen, and
+        // whether losing a quarter of the picture is a fair trade for that is
+        // not a call Press can make for somebody.
+        //
+        // Shown only when the source is neither of the two shapes players are
+        // usually on -- offering a 16:9 crop of a 16:9 video is a decision put
+        // in front of somebody for no reason.
+        let source = (facts.width, facts.height);
+        if crop::is_unusual(source) {
+            ui.add_space(space::BLOCK);
+            theme::line(ui, text::CROP_OFFER.get(lang), theme::INK);
+            ui.add_space(space::TIGHT);
+            for shape in crop::Shape::ALL {
+                let Some(window) = crop::window(source, shape, 0.5) else {
+                    continue;
+                };
+                let (rw, rh) = shape.ratio();
+                // The COST, on the option itself. It is the whole decision: from
+                // a 4:3 source, 16:9 gives up a quarter of the picture and 16:10
+                // gives up noticeably less, and nobody can weigh that without
+                // the number.
+                let label = text::CROP_OPTION
+                    .get(lang)
+                    .replace("{ratio}", &format!("{rw}:{rh}"))
+                    .replace("{percent}", &format!("{:.0}", window.lost(source) * 100.0));
+                let chosen = chose.is_some_and(|c: crop::Choice| c.shape == shape);
+                if theme::pick(ui, &label, chosen).clicked() {
+                    picked = Some(if chosen {
+                        None
+                    } else {
+                        Some(crop::Choice::centred(shape))
+                    });
+                }
+                ui.add_space(2.0);
+            }
+            if chose.is_some() {
+                ui.add_space(space::TIGHT);
+                theme::muted(ui, text::CROP_DRAG.get(lang));
+            }
+        }
+
         // The consequence of the one choice the charter makes. It lives HERE,
         // not under the timeline, and that is not cosmetic: below the timeline
         // it appeared when the opening handle left zero and pushed the whole
@@ -1912,6 +2122,7 @@ fn verdict_card(ui: &mut egui::Ui, lang: Lang, loaded: &Inspect, no_encoder: boo
             );
         }
     });
+    picked
 }
 
 /// The DETERMINISTIC findings: everything whose answer follows from the file.
@@ -1934,7 +2145,7 @@ fn findings(facts: &Facts, lang: Lang) -> Vec<(String, String)> {
         ));
     }
     if u64::from(facts.width) * u64::from(facts.height) > limits::MAX_PIXELS {
-        let target = crate::plan::plan(facts, None)
+        let target = crate::plan::plan(facts, None, None)
             .size
             .unwrap_or((facts.width, facts.height));
         out.push((
@@ -2155,6 +2366,7 @@ mod tests {
             source_bytes: 98_000_000,
             source_facts: facts_of("h264", 3840, 2160, 120.0),
             opening_cut: 1.5,
+            crop: None,
             material: Box::new(Material::for_test(
                 PathBuf::from(LONG),
                 96_000_000,
@@ -2212,6 +2424,7 @@ mod tests {
                         source_bytes: 98_000_000,
                         source_facts: facts_of("h264", 3840, 2160, 120.0),
                         trim: Trim::default(),
+                        crop: None,
                         material: None,
                         encoded: None,
                     },
@@ -2321,11 +2534,12 @@ mod tests {
     /// The whole card, as one list of rendered lines.
     fn card_lines(bench: &Bench, lang: Lang) -> Vec<String> {
         let pending = bench.pending();
+        let blocked = bench.blocked();
         let (_, bytes, facts) = bench.have();
         let mut lines = vec![file_name(&bench.source)];
 
         lines.push(
-            match (&bench.said, bench.encoded.is_some(), pending.is_empty()) {
+            match (&bench.said, bench.encoded.is_some(), blocked) {
                 (Some(Said::Failed(_)), ..) => text::FAILED.get(lang),
                 (Some(Said::StillTooLarge { .. }), ..) => text::STILL_TOO_LARGE.get(lang),
                 (_, true, true) => text::BENCH_COMPRESSED.get(lang),
@@ -2401,6 +2615,7 @@ mod tests {
                 source_bytes,
                 source_facts: source,
                 opening_cut: 0.0,
+                crop: None,
                 material: Box::new(Material::for_test(
                     PathBuf::from(LONG),
                     material_bytes,

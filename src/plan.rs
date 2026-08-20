@@ -29,6 +29,7 @@
 //! An already-AV1 source is never re-encoded at all: a second generation of loss
 //! measured ~190% and buys nothing.
 
+use crate::crop;
 use crate::gate::{Facts, limits};
 
 /// The quality dial, and the only knob worth touching. Chosen by K against
@@ -56,7 +57,10 @@ pub const TRIM_TOLERANCE: f64 = 1.0;
 /// The shape this particular video has to end up in.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Target {
-    /// `None` keeps the source's frame size.
+    /// The charter's crop, applied BEFORE anything else. `None` keeps the whole
+    /// frame.
+    pub crop: Option<crop::Window>,
+    /// `None` keeps the frame size the crop left behind.
     pub size: Option<(u32, u32)>,
     /// `None` keeps the source's frame rate.
     pub fps: Option<u32>,
@@ -71,7 +75,26 @@ pub struct Target {
 
 impl Target {
     pub fn is_noop(&self) -> bool {
-        self.size.is_none() && self.fps.is_none() && self.trim_to.is_none() && !self.must_reencode
+        self.crop.is_none()
+            && self.size.is_none()
+            && self.fps.is_none()
+            && self.trim_to.is_none()
+            && !self.must_reencode
+    }
+
+    /// The frame size the result will actually have, given what went in.
+    ///
+    /// Crop then scale, in that order, which is the order the filters run in.
+    /// Reading `size` alone is wrong whenever a crop happened without one --
+    /// the picture is smaller and nothing said so.
+    pub fn frame_size(&self, source: (u32, u32)) -> (u32, u32) {
+        if let Some(size) = self.size {
+            return size;
+        }
+        match self.crop {
+            Some(window) => (window.width, window.height),
+            None => source,
+        }
     }
 }
 
@@ -81,25 +104,42 @@ impl Target {
 /// `limits::OVERRUN_ALLOWANCE_SECONDS`. `None` means no opinion, and the video
 /// keeps its own length: **the gate does not judge duration and Press must never
 /// imply that it does.**
-pub fn plan(facts: &Facts, allowance: Option<f64>) -> Target {
-    let pixels = u64::from(facts.width) * u64::from(facts.height);
+///
+/// `crop` is the charter's own decision and is applied FIRST, so everything
+/// after it is decided on the picture that will actually exist. A crop can take
+/// a source under the pixel budget on its own -- 2560x1960 is over it and the
+/// 16:9 window out of it is 2560x1440, exactly at the line -- and it can equally
+/// leave one still over, which then scales as usual. Deciding the scale from the
+/// SOURCE's dimensions would get both cases wrong: a needless scale in the first
+/// and, in the second, a scale factor computed for a picture that no longer
+/// exists by the time it runs.
+pub fn plan(facts: &Facts, allowance: Option<f64>, crop: Option<crop::Window>) -> Target {
+    let (width, height) = match crop {
+        Some(window) => (window.width, window.height),
+        None => (facts.width, facts.height),
+    };
+
+    let pixels = u64::from(width) * u64::from(height);
     let size = (pixels > limits::MAX_PIXELS).then(|| {
         let scale = (limits::MAX_PIXELS as f64 / pixels as f64).sqrt();
         // Down to EVEN dimensions: yuv420p subsamples by two, and rounding DOWN
-        // keeps the result inside the budget rather than a pixel over it.
-        (
-            even_floor(facts.width, scale),
-            even_floor(facts.height, scale),
-        )
+        // keeps the result inside the budget rather than a pixel over it. One
+        // factor for both axes, so a crop's shape survives the scaling that
+        // follows it.
+        (even_floor(width, scale), even_floor(height, scale))
     });
 
     let fps = crate::gate::probe::over_fps_limit(facts.fps).then_some(limits::MAX_FPS);
     let trim_to = allowance.filter(|a| facts.duration > *a);
 
-    let must_reencode = size.is_some() || fps.is_some() || !limits::codec_allowed(facts.codec);
+    // A crop rewrites the picture, so it forces the encode by itself even when
+    // everything else about the file is already legal.
+    let must_reencode =
+        crop.is_some() || size.is_some() || fps.is_some() || !limits::codec_allowed(facts.codec);
     let may_try_av1 = !must_reencode && facts.codec != Some("av1");
 
     Target {
+        crop,
         size,
         fps,
         trim_to,
@@ -147,7 +187,16 @@ pub fn command(input: &str, output: &str, target: &Target, encode: Encode) -> Ve
             cmd.push("copy".to_owned());
         }
         Encode::Av1(crf) => {
+            // CROP FIRST. Everything after it works on the picture the crop
+            // leaves behind, which is the picture the scale factor was
+            // computed for.
             let mut filters = Vec::new();
+            if let Some(window) = target.crop {
+                filters.push(format!(
+                    "crop={}:{}:{}:{}",
+                    window.width, window.height, window.x, window.y
+                ));
+            }
             if let Some((w, h)) = target.size {
                 filters.push(format!("scale={w}:{h}:flags=lanczos"));
             }
@@ -231,6 +280,12 @@ pub fn command_with_opening_cut(
     }
 
     let mut filters = Vec::new();
+    if let Some(window) = target.crop {
+        filters.push(format!(
+            "crop={}:{}:{}:{}",
+            window.width, window.height, window.x, window.y
+        ));
+    }
     if let Some((w, h)) = target.size {
         filters.push(format!("scale={w}:{h}:flags=lanczos"));
     }

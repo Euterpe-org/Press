@@ -913,6 +913,120 @@ pub static SHORT_SIZE: Text = Text {
     ru: "Файл слишком большой",
 };
 
+// ── the crop, which is an offer and never a finding ────────────────────
+
+/// The nudge, shown only when the source is neither shape players are usually
+/// on. Worded as an observation, not a fault: the gate checks a pixel COUNT and
+/// has no opinion about shape, so a 4:3 background video is accepted and will
+/// play -- it simply will not fill the screen.
+pub static CROP_OFFER: Text = Text {
+    en: "Players are usually on 16:9 or 16:10 — this fills neither",
+    zh_hans: "玩家屏幕通常是 16:9 或 16:10，这个都填不满",
+    zh_hant: "玩家螢幕通常是 16:9 或 16:10，這個都填不滿",
+    ja: "プレイヤーの画面はたいてい 16:9 か 16:10 で、これはどちらも埋めません",
+    ko: "플레이어 화면은 보통 16:9나 16:10이고, 이 영상은 어느 쪽도 채우지 못합니다",
+    de: "Spieler sind meist auf 16:9 oder 16:10 — das füllt keines von beiden",
+    es: "Los jugadores suelen usar 16:9 o 16:10; esto no llena ninguno",
+    fr: "Les joueurs sont le plus souvent en 16:9 ou 16:10 — ceci ne remplit ni l'un ni l'autre",
+    hr: "Igrači su obično na 16:9 ili 16:10 — ovo ne ispunjava nijedan",
+    hu: "A játékosok általában 16:9-en vagy 16:10-en vannak — ez egyiket sem tölti ki",
+    id: "Layar pemain biasanya 16:9 atau 16:10 — ini tidak memenuhi keduanya",
+    nl: "Spelers zitten meestal op 16:9 of 16:10 — dit vult geen van beide",
+    pt: "Os jogadores costumam usar 16:9 ou 16:10 — isto não preenche nenhum",
+    ru: "У игроков обычно 16:9 или 16:10 — это не заполняет ни то, ни другое",
+};
+
+/// A crop option, with what it costs. The cost is the whole decision: from a
+/// 4:3 source, 16:9 gives up a quarter of the picture and 16:10 gives up
+/// noticeably less.
+pub static CROP_OPTION: Text = Text {
+    en: "{ratio} · loses {percent}%",
+    zh_hans: "{ratio} · 切掉 {percent}%",
+    zh_hant: "{ratio} · 切掉 {percent}%",
+    ja: "{ratio} · {percent}% を切る",
+    ko: "{ratio} · {percent}% 잘림",
+    de: "{ratio} · verliert {percent}%",
+    es: "{ratio} · pierde {percent}%",
+    fr: "{ratio} · perd {percent}%",
+    hr: "{ratio} · gubi {percent}%",
+    hu: "{ratio} · {percent}%-ot veszít",
+    id: "{ratio} · kehilangan {percent}%",
+    nl: "{ratio} · verliest {percent}%",
+    pt: "{ratio} · perde {percent}%",
+    ru: "{ratio} · теряет {percent}%",
+};
+
+/// Turning the crop off again.
+pub static CROP_NONE: Text = Text {
+    en: "Keep it all",
+    zh_hans: "都不裁",
+    zh_hant: "都不裁",
+    ja: "切らない",
+    ko: "자르지 않음",
+    de: "Alles behalten",
+    es: "No recortar",
+    fr: "Tout garder",
+    hr: "Zadrži sve",
+    hu: "Maradjon mind",
+    id: "Simpan semuanya",
+    nl: "Alles houden",
+    pt: "Manter tudo",
+    ru: "Оставить всё",
+};
+
+/// Only shown once a crop is chosen, because only then is there something to
+/// drag.
+pub static CROP_DRAG: Text = Text {
+    en: "Drag the picture to choose what to keep",
+    zh_hans: "拖动画面选择保留哪一块",
+    zh_hant: "拖動畫面選擇保留哪一塊",
+    ja: "映像をドラッグして残す範囲を選べます",
+    ko: "화면을 끌어 남길 부분을 고르세요",
+    de: "Zieh am Bild, um den Ausschnitt zu wählen",
+    es: "Arrastra la imagen para elegir qué conservar",
+    fr: "Faites glisser l'image pour choisir ce qui reste",
+    hr: "Povucite sliku da odaberete što ostaje",
+    hu: "Húzd a képet, hogy kiválaszd a megtartott részt",
+    id: "Seret gambar untuk memilih bagian yang disimpan",
+    nl: "Sleep het beeld om te kiezen wat blijft",
+    pt: "Arraste a imagem para escolher o que fica",
+    ru: "Потяните изображение, чтобы выбрать оставляемую часть",
+};
+
+pub static SHORT_CROP: Text = Text {
+    en: "Crop requested",
+    zh_hans: "要裁画面",
+    zh_hant: "要裁畫面",
+    ja: "切り抜きの指定あり",
+    ko: "자르기 요청됨",
+    de: "Zuschnitt gewünscht",
+    es: "Recorte solicitado",
+    fr: "Recadrage demandé",
+    hr: "Zatraženo izrezivanje",
+    hu: "Kért vágás",
+    id: "Pemotongan diminta",
+    nl: "Bijsnijden gevraagd",
+    pt: "Recorte solicitado",
+    ru: "Запрошена обрезка",
+};
+
+pub static WILL_CROP: Text = Text {
+    en: "crop it to {width}×{height}",
+    zh_hans: "裁成 {width}×{height}",
+    zh_hant: "裁成 {width}×{height}",
+    ja: "{width}×{height} に切り抜く",
+    ko: "{width}×{height}로 자름",
+    de: "auf {width}×{height} zuschneiden",
+    es: "recortarlo a {width}×{height}",
+    fr: "la recadrer en {width}×{height}",
+    hr: "izrezati na {width}×{height}",
+    hu: "{width}×{height} méretre vágni",
+    id: "memotongnya ke {width}×{height}",
+    nl: "bijsnijden naar {width}×{height}",
+    pt: "recortá-lo para {width}×{height}",
+    ru: "обрезать до {width}×{height}",
+};
+
 pub static SHORT_OPENING: Text = Text {
     en: "Opening to cut",
     zh_hans: "开头要裁掉",
@@ -1490,6 +1604,12 @@ pub static EVERY_STRING: &[(&str, &Text)] = &[
     ("SHORT_CODEC", &SHORT_CODEC),
     ("SHORT_SIZE", &SHORT_SIZE),
     ("SHORT_OPENING", &SHORT_OPENING),
+    ("CROP_OFFER", &CROP_OFFER),
+    ("CROP_OPTION", &CROP_OPTION),
+    ("CROP_NONE", &CROP_NONE),
+    ("CROP_DRAG", &CROP_DRAG),
+    ("SHORT_CROP", &SHORT_CROP),
+    ("WILL_CROP", &WILL_CROP),
     ("WILL_SCALE", &WILL_SCALE),
     ("WILL_FPS", &WILL_FPS),
     ("WILL_CODEC", &WILL_CODEC),

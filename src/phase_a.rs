@@ -161,6 +161,8 @@ pub fn run(
     // The pinned recipe, unchanged: `-c copy`, `-an`, `+faststart`, and `-t`
     // only when the tail is being cut. No `-ss` -- see `plan::command`.
     let copy_only = Target {
+        // A copy cannot crop either.
+        crop: None,
         // A copy cannot rescale or reframe, so the shape it is asked for is the
         // shape it already has. Carrying the real target here would only make
         // `command` build filters that `-c copy` ignores.

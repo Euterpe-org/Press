@@ -113,42 +113,46 @@ fn one_drop_loads_the_file_exactly_once() {
 #[test]
 fn nothing_is_ever_drawn_outside_the_window() {
     let size = egui::Vec2::from(euterpe_press::app::WINDOW);
-    let ctx = egui::Context::default();
-    let mut press = Press::new(&ctx, Lang::En, None);
 
-    // Two findings and a CJK filename: the tallest a readout gets.
-    let mut input = sized_input(size);
-    input
-        .dropped_files
-        .push(Arc::new(Dropped(fixture("audio_pixels_over.mp4"))));
-    let _ = frame(&ctx, &mut press, input);
-    // Settle: egui needs a pass to know how tall things are.
-    let mut shapes = Vec::new();
-    for _ in 0..3 {
-        shapes = frame(&ctx, &mut press, sized_input(size));
-    }
+    // Two findings and a CJK filename is the tallest a readout of FAULTS gets.
+    // Portrait is the tallest it gets for another reason entirely: it is neither
+    // shape a player's screen is, so the card also carries the crop offer and
+    // both of its options.
+    for name in ["audio_pixels_over.mp4", "portrait.mp4"] {
+        let ctx = egui::Context::default();
+        let mut press = Press::new(&ctx, Lang::En, None);
 
-    // Measured on the SHAPES that were actually emitted, not on a layout
-    // rectangle: the regions are clipped, so a layout figure would say the
-    // content fits even where it had been cut off to make it fit. `region`
-    // asserts the fitting; this asserts that nothing is painted outside the
-    // glass.
-    let screen = Rect::from_min_size(pos2(0.0, 0.0), size);
-    let mut painted = Rect::NOTHING;
-    for shape in &shapes {
-        let bounds = shape
-            .shape
-            .visual_bounding_rect()
-            .intersect(shape.clip_rect);
-        if bounds.is_positive() {
-            painted = painted.union(bounds);
+        let mut input = sized_input(size);
+        input.dropped_files.push(Arc::new(Dropped(fixture(name))));
+        let _ = frame(&ctx, &mut press, input);
+        // Settle: egui needs a pass to know how tall things are.
+        let mut shapes = Vec::new();
+        for _ in 0..3 {
+            shapes = frame(&ctx, &mut press, sized_input(size));
         }
+
+        // Measured on the SHAPES that were actually emitted, not on a layout
+        // rectangle: the regions are clipped, so a layout figure would say the
+        // content fits even where it had been cut off to make it fit. `region`
+        // asserts the fitting; this asserts that nothing is painted outside the
+        // glass.
+        let screen = Rect::from_min_size(pos2(0.0, 0.0), size);
+        let mut painted = Rect::NOTHING;
+        for shape in &shapes {
+            let bounds = shape
+                .shape
+                .visual_bounding_rect()
+                .intersect(shape.clip_rect);
+            if bounds.is_positive() {
+                painted = painted.union(bounds);
+            }
+        }
+        assert!(painted.is_positive(), "{name}: nothing was painted at all");
+        assert!(
+            screen.contains_rect(painted.shrink(0.5)),
+            "{name}: painted {painted:?} outside a window of {screen:?}"
+        );
     }
-    assert!(painted.is_positive(), "nothing was painted at all");
-    assert!(
-        screen.contains_rect(painted.shrink(0.5)),
-        "painted {painted:?} outside a window of {screen:?}"
-    );
 }
 
 /// Dropping a second file replaces the first, once.

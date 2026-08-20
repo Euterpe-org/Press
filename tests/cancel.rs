@@ -182,12 +182,13 @@ fn cancelling_the_encode_leaves_the_material_behind() {
 
     // VP9 cannot be shipped, so this is the population with no fallback under
     // the old design.
-    let aim = phase_b::aim(&material.facts, material.bytes, 0.0).expect("an encode is needed");
+    let aim =
+        phase_b::aim(&material.facts, material.bytes, 0.0, None).expect("an encode is needed");
     assert_eq!(aim, phase_b::Aim::Must);
 
     let cancel = Cancel::new();
     cancel.request();
-    let outcome = phase_b::run(&ffmpeg, &material, aim, 0.0, &work, &cancel, |_| {});
+    let outcome = phase_b::run(&ffmpeg, &material, aim, 0.0, None, &work, &cancel, |_| {});
     assert!(
         matches!(outcome, phase_b::Outcome::Cancelled),
         "expected a cancellation: {outcome:?}"
@@ -230,7 +231,7 @@ fn a_file_whose_only_problem_is_audio_is_deliverable_after_phase_a() {
         "the lossless pass alone should make this uploadable"
     );
     assert_eq!(
-        phase_b::aim(&material.facts, material.bytes, 0.0),
+        phase_b::aim(&material.facts, material.bytes, 0.0, None),
         Some(phase_b::Aim::Beat {
             smaller_than: material.bytes
         }),

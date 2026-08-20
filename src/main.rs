@@ -230,12 +230,12 @@ fn repair(path: &Path) -> bool {
         .collect();
 
     // ── Phase B ──────────────────────────────────────────────────────────
-    let Some(aim) = phase_b::aim(&material.facts, material.bytes, 0.0) else {
+    let Some(aim) = phase_b::aim(&material.facts, material.bytes, 0.0, None) else {
         // Already conforming AV1: nothing to win and a generation to lose.
         return deliver(path, material.path(), &output, source_bytes, &did);
     };
 
-    let outcome = phase_b::run(&ffmpeg, &material, aim, 0.0, &work, &cancel, |step| {
+    let outcome = phase_b::run(&ffmpeg, &material, aim, 0.0, None, &work, &cancel, |step| {
         say(match step {
             phase_b::Step::Encoding {
                 crf,

@@ -249,6 +249,31 @@ pub fn transport_button(ui: &mut egui::Ui, glyph: &str) -> egui::Response {
     .inner
 }
 
+/// One of a short list of alternatives, showing whether it is the one in force.
+///
+/// Distinct from [`chip`], which acts and forgets. This one carries STATE, so it
+/// has to look like it does: chosen fills with the accent and takes the ink that
+/// goes on it, unchosen stays an outline. A row of identical outlines with no
+/// selected state is a set of buttons pretending to be a choice.
+pub fn pick(ui: &mut egui::Ui, label: &str, chosen: bool) -> egui::Response {
+    let (fill, edge, ink) = if chosen {
+        (ACCENT, ACCENT, ON_ACCENT)
+    } else {
+        (Color32::TRANSPARENT, HAIRLINE, INK)
+    };
+    ui.scope(|ui| {
+        ui.spacing_mut().button_padding = egui::vec2(12.0, 6.0);
+        ui.add(
+            egui::Button::new(egui::RichText::new(label).size(size::SMALL).color(ink))
+                .fill(fill)
+                .stroke(Stroke::new(1.0, edge))
+                .corner_radius(CornerRadius::same(RADIUS - 4)),
+        )
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+    })
+    .inner
+}
+
 /// A small outlined button for use INSIDE a control row, where `quiet` -- sized
 /// for the action bar -- would out-weigh the control it sits beside.
 pub fn chip(ui: &mut egui::Ui, label: &str) -> egui::Response {

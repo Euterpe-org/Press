@@ -55,6 +55,7 @@
 use std::cell::Cell;
 use std::path::PathBuf;
 
+use crate::crop;
 use crate::ffmpeg::{Cancel, Ffmpeg, Progress, Ran, Watching};
 use crate::gate::{Facts, Verdict, limits};
 use crate::phase_a::Material;
@@ -124,14 +125,45 @@ pub enum Aim {
     Beat { smaller_than: u64 },
 }
 
-/// A problem the material still has, for the screen that asks whether to fix it.
+/// Something the next encode will do, for the screen that asks whether to run it.
+///
+/// Two kinds, and the difference matters more than it looks. A resolution over
+/// the budget is a PROBLEM: the file cannot be uploaded until it is fixed. A
+/// crop, or a cut to the opening, is a REQUEST: the file is perfectly uploadable
+/// without it and simply is not yet what the charter asked for. Calling both
+/// "not ready to upload" says something untrue about the second.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Pending {
-    Scale { from: (u32, u32), to: (u32, u32) },
-    FrameRate { from: i64, to: u32 },
-    Codec { from: String },
-    OpeningCut { seconds: f64 },
-    TooLarge { now: u64, limit: u64 },
+    Scale {
+        from: (u32, u32),
+        to: (u32, u32),
+    },
+    FrameRate {
+        from: i64,
+        to: u32,
+    },
+    Codec {
+        from: String,
+    },
+    TooLarge {
+        now: u64,
+        limit: u64,
+    },
+    /// The charter's own, both of these.
+    OpeningCut {
+        seconds: f64,
+    },
+    Crop {
+        to: (u32, u32),
+    },
+}
+
+impl Pending {
+    /// Whether this stands between the file and the upload, as opposed to
+    /// between the file and what was asked for.
+    pub fn is_a_problem(&self) -> bool {
+        !matches!(self, Self::OpeningCut { .. } | Self::Crop { .. })
+    }
 }
 
 /// Where a Phase B run has got to.
@@ -182,9 +214,21 @@ pub enum Outcome {
 }
 
 /// What is still wrong with a file, in the order it will be fixed.
-pub fn pending(facts: &Facts, bytes: u64, opening_cut: f64) -> Vec<Pending> {
-    let target = plan::plan(facts, None);
+pub fn pending(
+    facts: &Facts,
+    bytes: u64,
+    opening_cut: f64,
+    crop: Option<crop::Window>,
+) -> Vec<Pending> {
+    let target = plan::plan(facts, None, crop);
     let mut out = Vec::new();
+
+    // First in the chain, so first in the list.
+    if let Some(window) = crop {
+        out.push(Pending::Crop {
+            to: (window.width, window.height),
+        });
+    }
 
     if let Some(to) = target.size {
         out.push(Pending::Scale {
@@ -227,9 +271,9 @@ pub fn pending(facts: &Facts, bytes: u64, opening_cut: f64) -> Vec<Pending> {
 /// The one case worth refusing outright: a file that already conforms and is
 /// already AV1. Re-encoding AV1 to AV1 was measured at ~190% of the original for
 /// no visible gain, so there is nothing to win and a generation to lose.
-pub fn aim(facts: &Facts, bytes: u64, opening_cut: f64) -> Option<Aim> {
+pub fn aim(facts: &Facts, bytes: u64, opening_cut: f64, crop: Option<crop::Window>) -> Option<Aim> {
     let conforms = crate::gate::check(bytes, Some(facts)).passes();
-    if !conforms || opening_cut > 0.0 {
+    if !conforms || opening_cut > 0.0 || crop.is_some() {
         return Some(Aim::Must);
     }
     if facts.codec == Some("av1") {
@@ -291,11 +335,13 @@ enum Killed {
 }
 
 /// Run the size contest.
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     ffmpeg: &Ffmpeg,
     material: &Material,
     aim: Aim,
     opening_cut: f64,
+    crop: Option<crop::Window>,
     work: &Workspace,
     cancel: &Cancel,
     mut on_step: impl FnMut(Step),
@@ -303,10 +349,13 @@ pub fn run(
     let facts = &material.facts;
     // Recomputed from the MATERIAL, and with no allowance: Phase A already cut
     // the tail, so anything left to do is picture work.
-    let target = plan::plan(facts, None);
+    let target = plan::plan(facts, None, crop);
     let seconds = (facts.duration - opening_cut).max(0.0);
     let expect = Expect {
-        size: target.size.unwrap_or((facts.width, facts.height)),
+        // Crop THEN scale, which is the order the filters run in. Reading
+        // `size` alone expects the source's dimensions from a picture that has
+        // just been cut smaller.
+        size: target.frame_size((facts.width, facts.height)),
         codec: Some("av1"),
         seconds,
         tolerance: plan::TRIM_TOLERANCE,

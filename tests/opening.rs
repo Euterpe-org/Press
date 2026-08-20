@@ -142,28 +142,30 @@ fn produce(
 
     // The opening cut is Phase B's, because it needs `-ss` and `-ss` re-encodes.
     let cut = trim.cut_opening;
-    let from = match phase_b::aim(&material.facts, material.bytes, cut) {
-        Some(aim) => match phase_b::run(ffmpeg, &material, aim, cut, &work, &cancel, |_| {}) {
-            phase_b::Outcome::Encoded(done) => done.path.clone(),
-            phase_b::Outcome::MaterialWins { .. } => material.path().to_path_buf(),
-            // The workspace listing comes with it: "it failed" without what was
-            // on disk sends whoever reads this hunting for the wrong thing.
-            other => {
-                let left: Vec<String> = std::fs::read_dir(work.dir())
-                    .into_iter()
-                    .flatten()
-                    .flatten()
-                    .map(|e| {
-                        format!(
-                            "{} ({} bytes)",
-                            e.file_name().to_string_lossy(),
-                            e.metadata().map(|m| m.len()).unwrap_or(0)
-                        )
-                    })
-                    .collect();
-                panic!("expected a file: {other:?}; workspace holds {left:?}");
+    let from = match phase_b::aim(&material.facts, material.bytes, cut, None) {
+        Some(aim) => {
+            match phase_b::run(ffmpeg, &material, aim, cut, None, &work, &cancel, |_| {}) {
+                phase_b::Outcome::Encoded(done) => done.path.clone(),
+                phase_b::Outcome::MaterialWins { .. } => material.path().to_path_buf(),
+                // The workspace listing comes with it: "it failed" without what was
+                // on disk sends whoever reads this hunting for the wrong thing.
+                other => {
+                    let left: Vec<String> = std::fs::read_dir(work.dir())
+                        .into_iter()
+                        .flatten()
+                        .flatten()
+                        .map(|e| {
+                            format!(
+                                "{} ({} bytes)",
+                                e.file_name().to_string_lossy(),
+                                e.metadata().map(|m| m.len()).unwrap_or(0)
+                            )
+                        })
+                        .collect();
+                    panic!("expected a file: {other:?}; workspace holds {left:?}");
+                }
             }
-        },
+        }
         None => material.path().to_path_buf(),
     };
 

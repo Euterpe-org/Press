@@ -140,7 +140,7 @@ fn every_scenario_is_planned_the_way_the_server_plans_it() {
 
     for scenario in &recipe.scenarios {
         let name = &scenario.name;
-        let got = plan::plan(&facts_of(&scenario.facts), scenario.allowance);
+        let got = plan::plan(&facts_of(&scenario.facts), scenario.allowance, None);
         let want = &scenario.target;
 
         assert_eq!(
@@ -174,7 +174,7 @@ fn has(cmd: &[String], arg: &str) -> bool {
 fn all_commands() -> Vec<(String, Target, Encode, Vec<String>)> {
     let mut out = Vec::new();
     for scenario in &recipe().scenarios {
-        let target = plan::plan(&facts_of(&scenario.facts), scenario.allowance);
+        let target = plan::plan(&facts_of(&scenario.facts), scenario.allowance, None);
         for encode in [Encode::Copy, Encode::Av1(plan::CRF), Encode::Av1(44)] {
             let cmd = plan::command("IN.mp4", "OUT.mp4", &target, encode);
             out.push((scenario.name.clone(), target.clone(), encode, cmd));
@@ -233,6 +233,7 @@ fn the_trim_can_only_ever_take_the_tail() {
 #[test]
 fn an_opening_cut_is_a_separate_act_with_its_own_rules() {
     let target = Target {
+        crop: None,
         size: Some((2560, 1440)),
         fps: Some(60),
         trim_to: Some(90.0),
@@ -308,7 +309,7 @@ fn the_audio_track_is_dropped_on_every_path() {
 #[test]
 fn the_copy_path_never_touches_the_picture() {
     for scenario in &recipe().scenarios {
-        let target = plan::plan(&facts_of(&scenario.facts), scenario.allowance);
+        let target = plan::plan(&facts_of(&scenario.facts), scenario.allowance, None);
         let cmd = plan::command("IN.mp4", "OUT.mp4", &target, Encode::Copy);
         let name = &scenario.name;
 
@@ -328,7 +329,7 @@ fn the_copy_path_never_touches_the_picture() {
 #[test]
 fn a_reencode_clamps_what_the_plan_asked_for() {
     for scenario in &recipe().scenarios {
-        let target = plan::plan(&facts_of(&scenario.facts), scenario.allowance);
+        let target = plan::plan(&facts_of(&scenario.facts), scenario.allowance, None);
         let cmd = plan::command("IN.mp4", "OUT.mp4", &target, Encode::Av1(plan::CRF));
         let name = &scenario.name;
 
