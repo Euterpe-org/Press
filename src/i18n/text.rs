@@ -799,6 +799,33 @@ pub static NEXT_STEP: Text = Text {
     ru: "Далее",
 };
 
+/// Uploadable, and not yet what was asked for.
+///
+/// The third state, and it exists because the first two were both wrong here.
+/// Counting a crop as a fault said "not ready to upload" over a file that was
+/// perfectly ready; not counting it at all said "ready to upload" in green above
+/// a line reading "processing will crop it to 1080×606" -- one card contradicting
+/// itself.
+///
+/// Neither good news nor bad, so neither green nor amber: a plain statement that
+/// there is a press outstanding.
+pub static BENCH_WAITING: Text = Text {
+    en: "Your changes aren't applied yet",
+    zh_hans: "你要的改动还没做",
+    zh_hant: "你要的改動還沒做",
+    ja: "指定した変更はまだ適用されていません",
+    ko: "요청한 변경이 아직 적용되지 않았습니다",
+    de: "Deine Änderungen sind noch nicht angewendet",
+    es: "Tus cambios aún no se han aplicado",
+    fr: "Vos modifications ne sont pas encore appliquées",
+    hr: "Vaše promjene još nisu primijenjene",
+    hu: "A módosításaid még nincsenek alkalmazva",
+    id: "Perubahan Anda belum diterapkan",
+    nl: "Je wijzigingen zijn nog niet toegepast",
+    pt: "Suas alterações ainda não foram aplicadas",
+    ru: "Ваши изменения ещё не применены",
+};
+
 /// The headline when the file cannot be uploaded yet. Paired with a short list
 /// of what is wrong, because "one more pass needed" is not an answer.
 pub static NOT_READY: Text = Text {
@@ -1598,6 +1625,7 @@ pub static EVERY_STRING: &[(&str, &Text)] = &[
     ("LIST_SEP", &LIST_SEP),
     ("NEXT_STEP", &NEXT_STEP),
     ("NOT_READY", &NOT_READY),
+    ("BENCH_WAITING", &BENCH_WAITING),
     ("WILL_LEAD", &WILL_LEAD),
     ("SHORT_RESOLUTION", &SHORT_RESOLUTION),
     ("SHORT_FPS", &SHORT_FPS),

@@ -1353,6 +1353,11 @@ impl Press {
         };
         let pending = bench.pending();
         let blocked = bench.blocked();
+        // Asked for and not yet carried out. Not a fault -- the file is
+        // uploadable -- but not nothing either, and saying nothing about it put
+        // "ready to upload" in green directly above "processing will crop it to
+        // 1080x606".
+        let requested = pending.iter().any(|item| !item.is_a_problem());
         let (_, bytes, facts) = bench.have();
 
         centred(ui, "bench", |ui| {
@@ -1381,6 +1386,9 @@ impl Press {
                         (text::STILL_TOO_LARGE.get(lang), theme::NOTICE)
                     }
                     (_, true, false) => (text::BENCH_COMPRESSED.get(lang), theme::GOOD),
+                    // Neither good news nor bad, so neither green nor amber:
+                    // a plain statement that there is a press outstanding.
+                    (_, false, false) if requested => (text::BENCH_WAITING.get(lang), theme::INK),
                     (_, _, false) => (text::BENCH_READY.get(lang), theme::GOOD),
                     (_, _, true) => (text::NOT_READY.get(lang), theme::NOTICE),
                 };
@@ -1822,11 +1830,17 @@ fn viewport(
     let (sw, sh) = (source.0.max(1) as f32, source.1.max(1) as f32);
     if response.dragged() {
         let by = response.drag_delta();
+        // THE FRAME FOLLOWS THE POINTER. Drag down, the frame goes down.
+        //
+        // The other convention -- drag the PICTURE, so it slides under a fixed
+        // frame and the kept region appears to travel the opposite way -- is
+        // what a phone's photo cropper does, and it is what this did. It is also
+        // wrong HERE, because the picture is not what moves on screen: it is
+        // pinned, and a bright rectangle sits on top of it. Anything drawn as an
+        // object over a still image is grabbed as that object.
         let (moved, room) = match choice.along(source) {
-            // Dragging the picture right shows what was to its LEFT, so the
-            // window travels the other way. This is panning, not scrubbing.
-            crop::Along::Horizontal => (-by.x, shown.width() * (sw - window.width as f32) / sw),
-            crop::Along::Vertical => (-by.y, shown.height() * (sh - window.height as f32) / sh),
+            crop::Along::Horizontal => (by.x, shown.width() * (sw - window.width as f32) / sw),
+            crop::Along::Vertical => (by.y, shown.height() * (sh - window.height as f32) / sh),
         };
         if room > 0.5 {
             crop.as_mut().expect("chosen").offset = (choice.offset + moved / room).clamp(0.0, 1.0);
@@ -2535,21 +2549,29 @@ mod tests {
     fn card_lines(bench: &Bench, lang: Lang) -> Vec<String> {
         let pending = bench.pending();
         let blocked = bench.blocked();
+        // Asked for and not yet carried out. Not a fault -- the file is
+        // uploadable -- but not nothing either, and saying nothing about it put
+        // "ready to upload" in green directly above "processing will crop it to
+        // 1080x606".
+        let requested = pending.iter().any(|item| !item.is_a_problem());
         let (_, bytes, facts) = bench.have();
         let mut lines = vec![file_name(&bench.source)];
 
+        // The same decision the card makes, so a wording bug shows up here
+        // rather than in a screenshot.
         lines.push(
             match (&bench.said, bench.encoded.is_some(), blocked) {
                 (Some(Said::Failed(_)), ..) => text::FAILED.get(lang),
                 (Some(Said::StillTooLarge { .. }), ..) => text::STILL_TOO_LARGE.get(lang),
-                (_, true, true) => text::BENCH_COMPRESSED.get(lang),
-                (_, _, true) => text::BENCH_READY.get(lang),
-                (_, _, false) => text::NOT_READY.get(lang),
+                (_, true, false) => text::BENCH_COMPRESSED.get(lang),
+                (_, false, false) if requested => text::BENCH_WAITING.get(lang),
+                (_, _, false) => text::BENCH_READY.get(lang),
+                (_, _, true) => text::NOT_READY.get(lang),
             }
             .to_owned(),
         );
 
-        if !pending.is_empty() {
+        if bench.blocked() {
             lines.push(wrong_line(&pending, lang));
         } else if let Some(did) = did_line(bench, lang) {
             lines.push(did);
@@ -2670,6 +2692,17 @@ mod tests {
                 "two problems, nothing done yet",
                 shape(big(), 146_900_000, vec![], 146_900_000, None),
             ),
+            ("a crop asked for and not yet applied", {
+                let mut bench = shape(
+                    facts_of("h264", 1080, 816, 24.0),
+                    23_700_000,
+                    vec![Applied::AudioDropped],
+                    23_700_000,
+                    None,
+                );
+                bench.crop = Some(crop::Choice::centred(crop::Shape::Wide));
+                bench
+            }),
             (
                 "two problems, then compressed",
                 shape(
