@@ -147,23 +147,6 @@ pub static DROP_BLOCKED_BY_ADMIN: Text = Text {
          Нажмите здесь, чтобы выбрать файл, или откройте Press с обычными правами.",
 };
 
-pub static NOT_A_VIDEO: Text = Text {
-    en: "That is not a video file",
-    zh_hans: "这不是视频文件",
-    zh_hant: "這不是影片檔案",
-    ja: "これは動画ファイルではありません",
-    ko: "영상 파일이 아닙니다",
-    de: "Das ist keine Videodatei",
-    es: "Eso no es un archivo de video",
-    fr: "Ce n'est pas un fichier vidéo",
-    hr: "To nije video datoteka",
-    hu: "Ez nem videofájl",
-    id: "Itu bukan berkas video",
-    nl: "Dat is geen videobestand",
-    pt: "Isso não é um arquivo de vídeo",
-    ru: "Это не видеофайл",
-};
-
 // ── the verdict ──────────────────────────────────────────────────────────
 
 pub static READING: Text = Text {
@@ -181,23 +164,6 @@ pub static READING: Text = Text {
     nl: "Bezig met lezen…",
     pt: "Lendo…",
     ru: "Чтение…",
-};
-
-pub static VERDICT_OK: Text = Text {
-    en: "Ready to upload as it is",
-    zh_hans: "已经符合要求，可以直接上传",
-    zh_hant: "已經符合要求，可以直接上傳",
-    ja: "このままアップロードできます",
-    ko: "그대로 업로드할 수 있습니다",
-    de: "Kann so hochgeladen werden",
-    es: "Listo para subir tal cual",
-    fr: "Prête à être envoyée telle quelle",
-    hr: "Spreman za prijenos ovakav kakav jest",
-    hu: "Így feltölthető",
-    id: "Siap diunggah apa adanya",
-    nl: "Kan zo geüpload worden",
-    pt: "Pronto para enviar como está",
-    ru: "Можно загружать как есть",
 };
 
 pub static VERDICT_WILL_FIX: Text = Text {
@@ -571,23 +537,6 @@ pub static STEP_ENCODING: Text = Text {
     ru: "Пробуем AV1 — оставим, только если он меньше ({percent})",
 };
 
-pub static STEP_ENCODING_FORCED: Text = Text {
-    en: "Re-encoding to AV1 ({percent})",
-    zh_hans: "正在转成 AV1（{percent}）",
-    zh_hant: "正在轉成 AV1（{percent}）",
-    ja: "AV1 に変換中（{percent}）",
-    ko: "AV1로 변환 중 ({percent})",
-    de: "Wird zu AV1 neu kodiert ({percent})",
-    es: "Recodificando a AV1 ({percent})",
-    fr: "Réencodage en AV1 ({percent})",
-    hr: "Prekodiranje u AV1 ({percent})",
-    hu: "Átkódolás AV1-re ({percent})",
-    id: "Mengodekan ulang ke AV1 ({percent})",
-    nl: "Omzetten naar AV1 ({percent})",
-    pt: "Recodificando para AV1 ({percent})",
-    ru: "Перекодирование в AV1 ({percent})",
-};
-
 pub static STEP_VERIFYING: Text = Text {
     en: "Checking the result…",
     zh_hans: "正在校验结果…",
@@ -605,165 +554,7 @@ pub static STEP_VERIFYING: Text = Text {
     ru: "Проверка результата…",
 };
 
-/// Cancelling when a compliant stream copy is already in hand.
-pub static CANCEL_KEEP: Text = Text {
-    en: "Stop and use what I have",
-    zh_hans: "不等了，就用现在这个",
-    zh_hant: "不等了，就用現在這個",
-    ja: "ここまでで確定する",
-    ko: "여기까지로 확정",
-    de: "Anhalten und das Bisherige nehmen",
-    es: "Parar y usar lo que ya hay",
-    fr: "Arrêter et garder ce qu'on a",
-    hr: "Stani i uzmi ovo što ima",
-    hu: "Állj le, és ez legyen",
-    id: "Berhenti dan pakai yang sudah ada",
-    nl: "Stoppen en nemen wat er is",
-    pt: "Parar e usar o que já tenho",
-    ru: "Остановить и взять текущее",
-};
-
-/// Cancelling when the encode IS the fix and stopping leaves nothing.
-pub static CANCEL_ABANDON: Text = Text {
-    en: "Give up on this file",
-    zh_hans: "放弃这个文件",
-    zh_hant: "放棄這個檔案",
-    ja: "このファイルをあきらめる",
-    ko: "이 파일을 포기",
-    de: "Diese Datei aufgeben",
-    es: "Renunciar a este archivo",
-    fr: "Abandonner ce fichier",
-    hr: "Odustani od ove datoteke",
-    hu: "Feladom ezt a fájlt",
-    id: "Menyerah pada berkas ini",
-    nl: "Dit bestand opgeven",
-    pt: "Desistir deste arquivo",
-    ru: "Отказаться от этого файла",
-};
-
-pub static CANCEL_ABANDON_HINT: Text = Text {
-    en: "This one can only be fixed by re-encoding, so stopping leaves nothing.",
-    zh_hans: "这个文件只能靠重编码修好，停下来就什么都不会有。",
-    zh_hant: "這個檔案只能靠重編碼修好，停下來就什麼都不會有。",
-    ja: "このファイルは再エンコードでしか直せないため、中断すると何も残りません。",
-    ko: "이 파일은 재인코딩으로만 고칠 수 있어서, 중단하면 아무것도 남지 않습니다.",
-    de: "Diese Datei lässt sich nur durch Neukodieren korrigieren — ein Abbruch \
-         hinterlässt nichts.",
-    es: "Este archivo solo se puede arreglar recodificando, así que parar no deja nada.",
-    fr: "Ce fichier ne peut être corrigé qu'en réencodant : s'arrêter ne laisse rien.",
-    hr: "Ova se datoteka može popraviti samo prekodiranjem, pa prekid ne ostavlja ništa.",
-    hu: "Ezt a fájlt csak újrakódolással lehet megjavítani, így a leállítás után semmi sem marad.",
-    id: "Berkas ini hanya bisa diperbaiki dengan pengodean ulang, jadi berhenti tidak \
-         menyisakan apa pun.",
-    nl: "Dit bestand is alleen met opnieuw coderen te herstellen; stoppen levert niets op.",
-    pt: "Este arquivo só pode ser corrigido recodificando, então parar não deixa nada.",
-    ru: "Этот файл можно исправить только перекодированием, поэтому после остановки \
-         ничего не останется.",
-};
-
 // ── the result ───────────────────────────────────────────────────────────
-
-pub static DONE: Text = Text {
-    en: "Done — this file will be accepted",
-    zh_hans: "完成 —— 这个文件会被接受",
-    zh_hant: "完成 —— 這個檔案會被接受",
-    ja: "完了しました。このファイルは受け付けられます",
-    ko: "완료 — 이 파일은 통과합니다",
-    de: "Fertig — diese Datei wird angenommen",
-    es: "Listo: este archivo será aceptado",
-    fr: "Terminé — ce fichier sera accepté",
-    hr: "Gotovo — ova će datoteka biti prihvaćena",
-    hu: "Kész — ezt a fájlt elfogadják",
-    id: "Selesai — berkas ini akan diterima",
-    nl: "Klaar — dit bestand wordt geaccepteerd",
-    pt: "Pronto — este arquivo será aceito",
-    ru: "Готово — этот файл примут",
-};
-
-pub static DONE_SIZE: Text = Text {
-    en: "{before} → {after}",
-    zh_hans: "{before} → {after}",
-    zh_hant: "{before} → {after}",
-    ja: "{before} → {after}",
-    ko: "{before} → {after}",
-    de: "{before} → {after}",
-    es: "{before} → {after}",
-    fr: "{before} → {after}",
-    hr: "{before} → {after}",
-    hu: "{before} → {after}",
-    id: "{before} → {after}",
-    nl: "{before} → {after}",
-    pt: "{before} → {after}",
-    ru: "{before} → {after}",
-};
-
-pub static DONE_UNTOUCHED: Text = Text {
-    en: "Picture untouched — nothing was re-encoded",
-    zh_hans: "画面没有被动过 —— 全程没有重编码",
-    zh_hant: "畫面沒有被動過 —— 全程沒有重編碼",
-    ja: "映像はそのままです。再エンコードは行っていません",
-    ko: "화면은 그대로입니다 — 재인코딩하지 않았습니다",
-    de: "Bild unangetastet — es wurde nichts neu kodiert",
-    es: "Imagen intacta: no se recodificó nada",
-    fr: "Image intacte — rien n'a été réencodé",
-    hr: "Slika je netaknuta — ništa nije prekodirano",
-    hu: "A kép érintetlen — semmit sem kódoltunk át",
-    id: "Gambar tidak disentuh — tidak ada pengodean ulang",
-    nl: "Beeld onaangeroerd — er is niets opnieuw gecodeerd",
-    pt: "Imagem intocada — nada foi recodificado",
-    ru: "Картинка не тронута — ничего не перекодировалось",
-};
-
-pub static DONE_AV1_LOST: Text = Text {
-    en: "AV1 was tried and came back larger, so the original picture was kept",
-    zh_hans: "试过 AV1，结果反而更大，所以保留了原画面",
-    zh_hant: "試過 AV1，結果反而更大，所以保留了原畫面",
-    ja: "AV1 も試しましたが大きくなったため、元の映像を残しました",
-    ko: "AV1도 시도했지만 더 커져서 원본 화면을 유지했습니다",
-    de: "AV1 wurde versucht und fiel größer aus, also blieb das Originalbild",
-    es: "Se probó AV1 y salió más grande, así que se conservó la imagen original",
-    fr: "L'AV1 a été essayé et s'est révélé plus lourd : l'image d'origine est conservée",
-    hr: "AV1 je isproban i ispao je veći, pa je zadržana izvorna slika",
-    hu: "Az AV1 nagyobb lett, ezért az eredeti kép maradt",
-    id: "AV1 sudah dicoba tapi hasilnya lebih besar, jadi gambar aslinya dipertahankan",
-    nl: "AV1 is geprobeerd en werd groter, dus het oorspronkelijke beeld is behouden",
-    pt: "O AV1 foi testado e ficou maior, então a imagem original foi mantida",
-    ru: "AV1 попробовали, он оказался больше — оставили исходную картинку",
-};
-
-pub static DONE_AV1_SKIPPED: Text = Text {
-    en: "The AV1 comparison was stopped, so this may not be the smallest possible",
-    zh_hans: "AV1 比对被中断了，所以这不一定是最小的版本",
-    zh_hant: "AV1 比對被中斷了，所以這不一定是最小的版本",
-    ja: "AV1 との比較を中断したため、これが最小とは限りません",
-    ko: "AV1 비교를 중단했으므로 이것이 가장 작은 결과가 아닐 수 있습니다",
-    de: "Der AV1-Vergleich wurde abgebrochen, dies ist also womöglich nicht das Kleinste",
-    es: "Se detuvo la comparación con AV1, así que puede que no sea lo más pequeño posible",
-    fr: "La comparaison AV1 a été interrompue : ce n'est peut-être pas le plus petit résultat",
-    hr: "Usporedba s AV1 je prekinuta, pa ovo možda nije najmanja moguća datoteka",
-    hu: "Az AV1-összehasonlítás megszakadt, így lehet, hogy nem ez a legkisebb",
-    id: "Perbandingan AV1 dihentikan, jadi ini mungkin bukan yang terkecil",
-    nl: "De AV1-vergelijking is gestopt, dus dit is mogelijk niet het kleinste resultaat",
-    pt: "A comparação com AV1 foi interrompida, então talvez não seja o menor possível",
-    ru: "Сравнение с AV1 прервано, поэтому это может быть не самый маленький вариант",
-};
-
-pub static ALREADY_STANDARD: Text = Text {
-    en: "Nothing to do — this file is already exactly right",
-    zh_hans: "不用动 —— 这个文件本来就完全合规",
-    zh_hant: "不用動 —— 這個檔案本來就完全合規",
-    ja: "何もする必要はありません。このファイルはすでに条件を満たしています",
-    ko: "할 일이 없습니다 — 이 파일은 이미 조건을 만족합니다",
-    de: "Nichts zu tun — diese Datei passt bereits genau",
-    es: "No hay nada que hacer: este archivo ya está exactamente bien",
-    fr: "Rien à faire — ce fichier est déjà exactement conforme",
-    hr: "Nema se što raditi — ova je datoteka već točno kakva treba biti",
-    hu: "Nincs teendő — ez a fájl már pontosan megfelel",
-    id: "Tidak ada yang perlu dilakukan — berkas ini sudah tepat",
-    nl: "Niets te doen — dit bestand is al precies goed",
-    pt: "Nada a fazer — este arquivo já está exatamente certo",
-    ru: "Делать нечего — файл уже полностью соответствует",
-};
 
 pub static CANCELLED: Text = Text {
     en: "Stopped. Nothing was written.",
@@ -797,6 +588,354 @@ pub static FAILED: Text = Text {
     nl: "Bij dit bestand is het niet gelukt",
     pt: "Com este arquivo não deu certo",
     ru: "С этим файлом не получилось",
+};
+
+// ── Phase A: the deterministic screen ──────────────────────────────────
+
+/// Nothing deterministic is wrong. Size is deliberately not mentioned: it is
+/// not a Phase A question and saying anything about it here would promise an
+/// answer Press does not have yet.
+pub static PHASE_A_CLEAR: Text = Text {
+    en: "Nothing to fix up front",
+    zh_hans: "第一层检查没发现问题",
+    zh_hant: "第一層檢查沒發現問題",
+    ja: "最初の確認では問題なし",
+    ko: "먼저 확인한 항목엔 문제 없음",
+    de: "Vorab nichts zu beheben",
+    es: "Nada que corregir de entrada",
+    fr: "Rien à corriger d'emblée",
+    hr: "Ništa za popraviti unaprijed",
+    hu: "Előzetesen nincs javítanivaló",
+    id: "Tidak ada yang perlu diperbaiki dulu",
+    nl: "Vooraf niets te herstellen",
+    pt: "Nada a corrigir de antemão",
+    ru: "Заранее исправлять нечего",
+};
+
+pub static PHASE_A_CLEAR_HINT: Text = Text {
+    en: "Trim it if you want to, then carry on.",
+    zh_hans: "想裁就裁，然后继续下一步。",
+    zh_hant: "想裁就裁，然後繼續下一步。",
+    ja: "必要ならトリミングしてから次へ進んでください。",
+    ko: "원하면 자른 뒤 다음 단계로 넘어가세요.",
+    de: "Schneide es zu, wenn du magst, und mach dann weiter.",
+    es: "Recórtalo si quieres y sigue adelante.",
+    fr: "Découpez-la si vous voulez, puis continuez.",
+    hr: "Skratite ga ako želite, pa nastavite.",
+    hu: "Vágd meg, ha szeretnéd, aztán folytasd.",
+    id: "Potong kalau mau, lalu lanjutkan.",
+    nl: "Snijd het bij als je wilt en ga dan verder.",
+    pt: "Corte se quiser e siga em frente.",
+    ru: "Обрежьте, если хотите, и продолжайте.",
+};
+
+// ── the bench, between the phases ──────────────────────────────────────
+
+pub static BENCH_READY: Text = Text {
+    en: "Ready to upload",
+    zh_hans: "可以直接上传了",
+    zh_hant: "可以直接上傳了",
+    ja: "そのままアップロードできます",
+    ko: "바로 업로드할 수 있습니다",
+    de: "Bereit zum Hochladen",
+    es: "Listo para subir",
+    fr: "Prêt à être envoyé",
+    hr: "Spremno za slanje",
+    hu: "Feltöltésre kész",
+    id: "Siap diunggah",
+    nl: "Klaar om te uploaden",
+    pt: "Pronto para enviar",
+    ru: "Готово к загрузке",
+};
+
+pub static BENCH_REMAINING: Text = Text {
+    en: "One more pass needed",
+    zh_hans: "还需要再处理一次",
+    zh_hant: "還需要再處理一次",
+    ja: "もう一度処理が必要です",
+    ko: "한 번 더 처리해야 합니다",
+    de: "Ein weiterer Durchgang nötig",
+    es: "Hace falta una pasada más",
+    fr: "Une passe de plus est nécessaire",
+    hr: "Potreban je još jedan prolaz",
+    hu: "Még egy menet kell",
+    id: "Perlu satu proses lagi",
+    nl: "Nog één ronde nodig",
+    pt: "Falta mais uma passagem",
+    ru: "Нужен ещё один проход",
+};
+
+/// Heads the list of what the lossless pass already did.
+pub static DIFF_HEADING: Text = Text {
+    en: "Done so far",
+    zh_hans: "已经做了",
+    zh_hant: "已經做了",
+    ja: "ここまでの処理",
+    ko: "지금까지 한 것",
+    de: "Bisher erledigt",
+    es: "Hecho hasta ahora",
+    fr: "Fait jusqu'ici",
+    hr: "Dosad učinjeno",
+    hu: "Eddig elvégezve",
+    id: "Yang sudah dilakukan",
+    nl: "Tot nu toe gedaan",
+    pt: "Feito até agora",
+    ru: "Сделано на данный момент",
+};
+
+pub static DIFF_AUDIO: Text = Text {
+    en: "Audio track removed",
+    zh_hans: "去掉了音轨",
+    zh_hant: "去掉了音軌",
+    ja: "音声トラックを削除しました",
+    ko: "오디오 트랙을 제거했습니다",
+    de: "Tonspur entfernt",
+    es: "Pista de audio eliminada",
+    fr: "Piste audio supprimée",
+    hr: "Zvučni zapis uklonjen",
+    hu: "Hangsáv eltávolítva",
+    id: "Trek audio dihapus",
+    nl: "Audiospoor verwijderd",
+    pt: "Faixa de áudio removida",
+    ru: "Звуковая дорожка удалена",
+};
+
+pub static DIFF_TAIL: Text = Text {
+    en: "Tail cut: {was} → {now}",
+    zh_hans: "裁掉了尾巴：{was} → {now}",
+    zh_hant: "裁掉了尾巴：{was} → {now}",
+    ja: "末尾をカット：{was} → {now}",
+    ko: "뒷부분을 잘랐습니다: {was} → {now}",
+    de: "Ende gekürzt: {was} → {now}",
+    es: "Cola recortada: {was} → {now}",
+    fr: "Fin coupée : {was} → {now}",
+    hr: "Rep odrezan: {was} → {now}",
+    hu: "Vége levágva: {was} → {now}",
+    id: "Ekor dipotong: {was} → {now}",
+    nl: "Staart afgeknipt: {was} → {now}",
+    pt: "Cauda cortada: {was} → {now}",
+    ru: "Хвост обрезан: {was} → {now}",
+};
+
+pub static DIFF_NOTHING: Text = Text {
+    en: "Nothing needed doing — this is your own file",
+    zh_hans: "什么都不用做 —— 这就是你原来的文件",
+    zh_hant: "什麼都不用做 —— 這就是你原來的檔案",
+    ja: "何もする必要がありませんでした。元のファイルのままです",
+    ko: "할 일이 없었습니다 — 원본 파일 그대로입니다",
+    de: "Nichts zu tun — das ist deine eigene Datei",
+    es: "No hizo falta nada: este es tu propio archivo",
+    fr: "Rien à faire — c'est votre fichier d'origine",
+    hr: "Ništa nije trebalo — ovo je vaša izvorna datoteka",
+    hu: "Nem kellett semmit tenni — ez a te saját fájlod",
+    id: "Tidak ada yang perlu dilakukan — ini berkas Anda sendiri",
+    nl: "Er hoefde niets te gebeuren — dit is je eigen bestand",
+    pt: "Nada precisou ser feito — este é o seu próprio arquivo",
+    ru: "Ничего не потребовалось — это ваш исходный файл",
+};
+
+/// Heads the list of what a transcode still has to fix.
+pub static PENDING_HEADING: Text = Text {
+    en: "Still to fix",
+    zh_hans: "还要处理",
+    zh_hant: "還要處理",
+    ja: "これから直すもの",
+    ko: "아직 고칠 것",
+    de: "Noch zu beheben",
+    es: "Aún por corregir",
+    fr: "Reste à corriger",
+    hr: "Još za popraviti",
+    hu: "Még javítandó",
+    id: "Masih perlu diperbaiki",
+    nl: "Nog te herstellen",
+    pt: "Ainda a corrigir",
+    ru: "Ещё нужно исправить",
+};
+
+pub static FIX_SIZE: Text = Text {
+    en: "compressed to fit under {limit} MB",
+    zh_hans: "会压到 {limit} MB 以内",
+    zh_hant: "會壓到 {limit} MB 以內",
+    ja: "{limit} MB 以内に圧縮します",
+    ko: "{limit} MB 이내로 압축합니다",
+    de: "wird unter {limit} MB gebracht",
+    es: "se comprimirá por debajo de {limit} MB",
+    fr: "sera compressée sous {limit} Mo",
+    hr: "bit će sažeto ispod {limit} MB",
+    hu: "{limit} MB alá tömörítjük",
+    id: "akan dikompresi di bawah {limit} MB",
+    nl: "wordt gecomprimeerd tot onder {limit} MB",
+    pt: "será comprimido para menos de {limit} MB",
+    ru: "будет сжато до {limit} МБ",
+};
+
+/// The parameters actually used, stated plainly. There is no knob for these --
+/// Press decides -- so the least it can do is say what it decided.
+pub static RESULT_RECIPE: Text = Text {
+    en: "AV1 · quality CRF {crf} · {encodes} encode(s)",
+    zh_hans: "AV1 · 画质 CRF {crf} · 编码 {encodes} 次",
+    zh_hant: "AV1 · 畫質 CRF {crf} · 編碼 {encodes} 次",
+    ja: "AV1 · 画質 CRF {crf} · エンコード {encodes} 回",
+    ko: "AV1 · 화질 CRF {crf} · 인코딩 {encodes}회",
+    de: "AV1 · Qualität CRF {crf} · {encodes} Durchgänge",
+    es: "AV1 · calidad CRF {crf} · {encodes} codificaciones",
+    fr: "AV1 · qualité CRF {crf} · {encodes} encodages",
+    hr: "AV1 · kvaliteta CRF {crf} · {encodes} kodiranja",
+    hu: "AV1 · minőség CRF {crf} · {encodes} kódolás",
+    id: "AV1 · kualitas CRF {crf} · {encodes} kali enkode",
+    nl: "AV1 · kwaliteit CRF {crf} · {encodes} encodes",
+    pt: "AV1 · qualidade CRF {crf} · {encodes} codificações",
+    ru: "AV1 · качество CRF {crf} · кодирований: {encodes}",
+};
+
+/// Size against the allowance. The percentage is the useful half: it says
+/// whether there was room left, which is the question the quality floor answers.
+pub static BENCH_SIZE: Text = Text {
+    en: "{before} → {after} · {percent}% of the {limit} allowed",
+    zh_hans: "{before} → {after} · 占上限 {limit} 的 {percent}%",
+    zh_hant: "{before} → {after} · 佔上限 {limit} 的 {percent}%",
+    ja: "{before} → {after} · 上限 {limit} の {percent}%",
+    ko: "{before} → {after} · 제한 {limit}의 {percent}%",
+    de: "{before} → {after} · {percent}% der erlaubten {limit}",
+    es: "{before} → {after} · {percent}% de los {limit} permitidos",
+    fr: "{before} → {after} · {percent}% des {limit} autorisés",
+    hr: "{before} → {after} · {percent}% od dopuštenih {limit}",
+    hu: "{before} → {after} · a megengedett {limit} {percent}%-a",
+    id: "{before} → {after} · {percent}% dari {limit} yang diizinkan",
+    nl: "{before} → {after} · {percent}% van de toegestane {limit}",
+    pt: "{before} → {after} · {percent}% dos {limit} permitidos",
+    ru: "{before} → {after} · {percent}% от разрешённых {limit}",
+};
+
+pub static SAID_MATERIAL_WINS: Text = Text {
+    en: "AV1 came back bigger, so the original picture was kept — it is both \
+         smaller and exact.",
+    zh_hans: "转成 AV1 反而更大，所以保留了原编码 —— 它既更小又是无损的。",
+    zh_hant: "轉成 AV1 反而更大，所以保留了原編碼 —— 它既更小又是無損的。",
+    ja: "AV1 のほうが大きくなったため、元の映像をそのまま使いました。小さく、しかも無劣化です。",
+    ko: "AV1이 오히려 더 커져서 원본 영상을 유지했습니다. 더 작고 무손실입니다.",
+    de: "AV1 kam größer zurück, also blieb das Originalbild — kleiner und exakt.",
+    es: "AV1 salió más grande, así que se conservó la imagen original: es más \
+         pequeña y exacta.",
+    fr: "L'AV1 est ressorti plus gros, l'image d'origine a donc été conservée : \
+         plus petite et exacte.",
+    hr: "AV1 je ispao veći, pa je zadržana izvorna slika — manja je i točna.",
+    hu: "Az AV1 nagyobb lett, ezért maradt az eredeti kép — kisebb és pontos.",
+    id: "AV1 malah lebih besar, jadi gambar aslinya dipertahankan — lebih kecil \
+         dan persis.",
+    nl: "AV1 kwam groter terug, dus is het originele beeld behouden — kleiner \
+         én exact.",
+    pt: "O AV1 ficou maior, então a imagem original foi mantida — é menor e exata.",
+    ru: "AV1 получился больше, поэтому осталось исходное изображение — оно \
+         меньше и точное.",
+};
+
+/// Shown while the search throws away one quality and starts another.
+pub static STEP_RECALIBRATING: Text = Text {
+    en: "Changing quality: CRF {from} → {to}",
+    zh_hans: "换个画质重来：CRF {from} → {to}",
+    zh_hant: "換個畫質重來：CRF {from} → {to}",
+    ja: "画質を変えてやり直します：CRF {from} → {to}",
+    ko: "화질을 바꿔 다시 시도합니다: CRF {from} → {to}",
+    de: "Qualität wird gewechselt: CRF {from} → {to}",
+    es: "Cambiando la calidad: CRF {from} → {to}",
+    fr: "Changement de qualité : CRF {from} → {to}",
+    hr: "Mijenjam kvalitetu: CRF {from} → {to}",
+    hu: "Minőségváltás: CRF {from} → {to}",
+    id: "Mengubah kualitas: CRF {from} → {to}",
+    nl: "Kwaliteit wordt gewijzigd: CRF {from} → {to}",
+    pt: "Mudando a qualidade: CRF {from} → {to}",
+    ru: "Меняю качество: CRF {from} → {to}",
+};
+
+/// Stop a run. Always safe now: Phase A's material exists before Phase B ever
+/// starts, so there is never nothing to go back to.
+pub static STOP: Text = Text {
+    en: "Stop",
+    zh_hans: "停止",
+    zh_hant: "停止",
+    ja: "停止",
+    ko: "중지",
+    de: "Anhalten",
+    es: "Detener",
+    fr: "Arrêter",
+    hr: "Zaustavi",
+    hu: "Leállítás",
+    id: "Hentikan",
+    nl: "Stoppen",
+    pt: "Parar",
+    ru: "Остановить",
+};
+
+/// Throw the whole thing away and start from a file again.
+pub static ABANDON: Text = Text {
+    en: "Discard",
+    zh_hans: "放弃",
+    zh_hant: "放棄",
+    ja: "破棄",
+    ko: "버리기",
+    de: "Verwerfen",
+    es: "Descartar",
+    fr: "Abandonner",
+    hr: "Odbaci",
+    hu: "Elvetés",
+    id: "Buang",
+    nl: "Weggooien",
+    pt: "Descartar",
+    ru: "Отменить",
+};
+
+/// Offered only where the advice above it is "trim it shorter".
+pub static BACK_TO_TRIM: Text = Text {
+    en: "Back to trimming",
+    zh_hans: "回去裁剪",
+    zh_hant: "回去裁剪",
+    ja: "トリミングに戻る",
+    ko: "자르기로 돌아가기",
+    de: "Zurück zum Zuschneiden",
+    es: "Volver al recorte",
+    fr: "Revenir au découpage",
+    hr: "Natrag na rezanje",
+    hu: "Vissza a vágáshoz",
+    id: "Kembali ke pemotongan",
+    nl: "Terug naar bijsnijden",
+    pt: "Voltar ao corte",
+    ru: "Вернуться к обрезке",
+};
+
+/// The file is already uploadable; this only makes it lighter.
+pub static SHRINK_FURTHER: Text = Text {
+    en: "Try to make it smaller",
+    zh_hans: "试试压得更小",
+    zh_hant: "試試壓得更小",
+    ja: "さらに小さくしてみる",
+    ko: "더 작게 만들어 보기",
+    de: "Kleiner machen versuchen",
+    es: "Intentar hacerlo más pequeño",
+    fr: "Essayer de le réduire",
+    hr: "Pokušaj smanjiti",
+    hu: "Próbáljuk kisebbre",
+    id: "Coba perkecil lagi",
+    nl: "Kleiner proberen te maken",
+    pt: "Tentar deixar menor",
+    ru: "Попробовать уменьшить",
+};
+
+pub static SAVE: Text = Text {
+    en: "Save the video",
+    zh_hans: "保存视频",
+    zh_hant: "儲存影片",
+    ja: "動画を保存",
+    ko: "영상 저장",
+    de: "Video speichern",
+    es: "Guardar el vídeo",
+    fr: "Enregistrer la vidéo",
+    hr: "Spremi videozapis",
+    hu: "Videó mentése",
+    id: "Simpan video",
+    nl: "Video opslaan",
+    pt: "Salvar o vídeo",
+    ru: "Сохранить видео",
 };
 
 /// The output's size while it is being written. The percentage says how far the
@@ -919,23 +1058,6 @@ pub static SHOW_IN_FOLDER: Text = Text {
     ru: "Показать в папке",
 };
 
-pub static ANOTHER: Text = Text {
-    en: "Another one",
-    zh_hans: "再来一个",
-    zh_hant: "再來一個",
-    ja: "次のファイル",
-    ko: "다음 파일",
-    de: "Noch eines",
-    es: "Otro más",
-    fr: "Un autre",
-    hr: "Još jedan",
-    hu: "Még egyet",
-    id: "Satu lagi",
-    nl: "Nog eentje",
-    pt: "Mais um",
-    ru: "Ещё один",
-};
-
 // ── the encoder ──────────────────────────────────────────────────────────
 
 pub static NO_ENCODER: Text = Text {
@@ -964,9 +1086,7 @@ pub static EVERY_STRING: &[(&str, &Text)] = &[
     ("DROP_RELEASE", &DROP_RELEASE),
     ("DROP_PICK_INSTEAD", &DROP_PICK_INSTEAD),
     ("DROP_BLOCKED_BY_ADMIN", &DROP_BLOCKED_BY_ADMIN),
-    ("NOT_A_VIDEO", &NOT_A_VIDEO),
     ("READING", &READING),
-    ("VERDICT_OK", &VERDICT_OK),
     ("VERDICT_WILL_FIX", &VERDICT_WILL_FIX),
     ("VERDICT_UNREADABLE", &VERDICT_UNREADABLE),
     ("FINDING_TOO_LARGE", &FINDING_TOO_LARGE),
@@ -987,25 +1107,33 @@ pub static EVERY_STRING: &[(&str, &Text)] = &[
     ("START", &START),
     ("STEP_COPYING", &STEP_COPYING),
     ("STEP_ENCODING", &STEP_ENCODING),
-    ("STEP_ENCODING_FORCED", &STEP_ENCODING_FORCED),
     ("STEP_VERIFYING", &STEP_VERIFYING),
-    ("CANCEL_KEEP", &CANCEL_KEEP),
-    ("CANCEL_ABANDON", &CANCEL_ABANDON),
-    ("CANCEL_ABANDON_HINT", &CANCEL_ABANDON_HINT),
-    ("DONE", &DONE),
-    ("DONE_SIZE", &DONE_SIZE),
-    ("DONE_UNTOUCHED", &DONE_UNTOUCHED),
-    ("DONE_AV1_LOST", &DONE_AV1_LOST),
-    ("DONE_AV1_SKIPPED", &DONE_AV1_SKIPPED),
-    ("ALREADY_STANDARD", &ALREADY_STANDARD),
     ("CANCELLED", &CANCELLED),
     ("FAILED", &FAILED),
     ("STEP_WRITTEN", &STEP_WRITTEN),
+    ("PHASE_A_CLEAR", &PHASE_A_CLEAR),
+    ("PHASE_A_CLEAR_HINT", &PHASE_A_CLEAR_HINT),
+    ("BENCH_READY", &BENCH_READY),
+    ("BENCH_REMAINING", &BENCH_REMAINING),
+    ("DIFF_HEADING", &DIFF_HEADING),
+    ("DIFF_AUDIO", &DIFF_AUDIO),
+    ("DIFF_TAIL", &DIFF_TAIL),
+    ("DIFF_NOTHING", &DIFF_NOTHING),
+    ("PENDING_HEADING", &PENDING_HEADING),
+    ("FIX_SIZE", &FIX_SIZE),
+    ("RESULT_RECIPE", &RESULT_RECIPE),
+    ("BENCH_SIZE", &BENCH_SIZE),
+    ("SAID_MATERIAL_WINS", &SAID_MATERIAL_WINS),
+    ("STEP_RECALIBRATING", &STEP_RECALIBRATING),
+    ("STOP", &STOP),
+    ("ABANDON", &ABANDON),
+    ("BACK_TO_TRIM", &BACK_TO_TRIM),
+    ("SHRINK_FURTHER", &SHRINK_FURTHER),
+    ("SAVE", &SAVE),
     ("SAVED_TO", &SAVED_TO),
     ("SAVE_TITLE", &SAVE_TITLE),
     ("STILL_TOO_LARGE", &STILL_TOO_LARGE),
     ("STILL_TOO_LARGE_DETAIL", &STILL_TOO_LARGE_DETAIL),
     ("SHOW_IN_FOLDER", &SHOW_IN_FOLDER),
-    ("ANOTHER", &ANOTHER),
     ("NO_ENCODER", &NO_ENCODER),
 ];

@@ -36,18 +36,21 @@
 //! * Four gaps exist (`theme::space`) and each means something.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
 use eframe::egui;
 
 use crate::ffmpeg::{Cancel, Ffmpeg};
-use crate::gate::{self, Facts, Verdict, limits};
+use crate::gate::{self, Facts, limits};
 use crate::i18n::{Lang, Text, text};
+use crate::phase_a::{self, Applied, Material};
+use crate::phase_b::{self, Aim, Encoded, Pending};
 use crate::plan::Trim;
 use crate::preview::Preview;
-use crate::standardise::{self, Outcome, Produced, Step, Treatment};
 use crate::theme::space;
 use crate::timeline::Change;
+use crate::workspace::Workspace;
 use crate::{fonts, theme};
 
 /// Height of the action bar's contents. Reserved before the body is measured.
@@ -104,20 +107,30 @@ pub struct Press {
     /// answer decides whether a decoder is being started per gesture or per
     /// frame.
     loads: u64,
+    /// A failure with no screen to show it on. Displayed over the drop zone
+    /// and cleared by the next file.
+    trouble: Option<String>,
 }
 
+/// The four screens, which are the two phases and the gaps around them.
+///
+/// `Inspect` and `Bench` are both "here is the situation, what now" screens, and
+/// the difference between them is exactly the difference between the phases:
+/// Inspect shows what is DECIDED and says nothing about size, because size is
+/// not a deterministic question. Bench shows what is left, which is only ever
+/// the codec and the weight.
 enum Stage {
     Empty,
-    Loaded(Box<Loaded>),
+    Inspect(Box<Inspect>),
     Working(Box<Working>),
-    Finished(Box<Finished>),
+    Bench(Box<Bench>),
 }
 
-struct Loaded {
+/// A file is loaded and nothing has been done to it.
+struct Inspect {
     path: PathBuf,
-    source_bytes: u64,
+    bytes: u64,
     facts: Option<Facts>,
-    verdict: Verdict,
     preview: Option<Preview>,
     /// Where the scrubber is, in seconds.
     at: f64,
@@ -127,31 +140,111 @@ struct Loaded {
 }
 
 struct Working {
-    path: PathBuf,
-    source_bytes: u64,
+    /// The charter's own file, for the heading. Never the intermediate: a
+    /// progress screen naming a random temp file tells nobody anything.
+    source: PathBuf,
+    phase: Phase,
     cancel: Cancel,
     inbox: Receiver<Note>,
-    step: Step,
-    /// Whether a compliant file already exists, so stopping now ships that
-    /// rather than ending with nothing.
-    ///
-    /// REPORTED by the worker, not predicted here. Predicting it from
-    /// `must_reencode` was wrong for a whole population: a 379 MB source at
-    /// 2560x1440 and 60 fps has a legal shape, so nothing was "forced", and the
-    /// window offered "stop waiting, use what we have" over a 375 MB remux that
-    /// the gate refuses. Only the worker knows whether anything has actually
-    /// survived, so only the worker gets to say.
-    fallback: bool,
+    /// Held so the temp directory outlives the worker that is writing into it.
+    work: Arc<Workspace>,
+    /// What the next screen will need, carried by the run itself.
+    held: Held,
 }
 
-struct Finished {
+enum Phase {
+    A(phase_a::Step),
+    B(phase_b::Step),
+}
+
+/// Between the phases: what we have, and what is still wrong with it.
+///
+/// This is the hub. Phase B returns here rather than to a terminal screen,
+/// which is what makes "try to make it smaller" an ordinary press of the same
+/// button rather than a mode of its own.
+struct Bench {
+    source: PathBuf,
     source_bytes: u64,
-    outcome: Outcome,
+    source_facts: Facts,
+    /// Carried from the scrubber. Applied by Phase B, because it needs `-ss`.
+    opening_cut: f64,
+    /// Phase A's output. **Every** Phase B run encodes from this and never from
+    /// a previous Phase B result -- that would be a second generation of loss
+    /// for no gain.
+    material: Box<Material>,
+    /// The best Phase B has produced, if it has produced anything.
+    encoded: Option<Box<Encoded>>,
+    /// What the last Phase B run concluded, when it did not hand back a file.
+    said: Option<Said>,
+    /// Where the result was written, once it has been.
+    saved: Option<PathBuf>,
+    work: Arc<Workspace>,
+}
+
+/// A Phase B run that ended without a better file, and why.
+enum Said {
+    /// AV1 was tried and came back bigger. The lossless material ships.
+    MaterialWins {
+        av1_was: Option<u64>,
+    },
+    /// Not even the coarsest quality fits. The remaining lever is length.
+    StillTooLarge {
+        smallest: u64,
+    },
+    Cancelled,
+    Failed(String),
+}
+
+impl Bench {
+    /// The file that would be written if the charter saved right now.
+    fn have(&self) -> (&Path, u64, &Facts) {
+        match &self.encoded {
+            Some(done) => (&done.path, done.bytes, &done.facts),
+            None => (
+                self.material.path(),
+                self.material.bytes,
+                &self.material.facts,
+            ),
+        }
+    }
+
+    /// What is still wrong. Empty means the file is uploadable as it stands.
+    fn pending(&self) -> Vec<Pending> {
+        let (_, bytes, facts) = self.have();
+        // The opening cut counts as outstanding until an encode has applied it.
+        let cut = if self.encoded.is_some() {
+            0.0
+        } else {
+            self.opening_cut
+        };
+        phase_b::pending(facts, bytes, cut)
+    }
+
+    /// Whether pressing the button again could change anything.
+    ///
+    /// Once Phase B has handed back a file, Press has given its answer -- there
+    /// is no second opinion to ask for, because the quality was not a guess.
+    fn worth_running(&self) -> Option<Aim> {
+        if self.encoded.is_some() {
+            return None;
+        }
+        phase_b::aim(&self.material.facts, self.material.bytes, self.opening_cut)
+    }
 }
 
 enum Note {
-    At(Step),
-    Done(Box<Outcome>),
+    Step(Phase),
+    SettledA(Box<phase_a::Outcome>),
+    FittedB(Box<phase_b::Outcome>),
+}
+
+/// What the charter pressed on the bench.
+enum Act {
+    Abandon,
+    BackToTrim,
+    Run,
+    Save,
+    Reveal,
 }
 
 impl Press {
@@ -166,6 +259,7 @@ impl Press {
             shown_pts: f64::NAN,
             pending: None,
             loads: 0,
+            trouble: None,
         }
     }
 
@@ -282,36 +376,32 @@ impl Press {
     fn action_height(&self) -> f32 {
         match &self.stage {
             Stage::Empty => 0.0,
-            Stage::Loaded(loaded) => {
-                if self.ffmpeg.is_some() && loaded.facts.is_some() {
+            Stage::Inspect(inspect) => {
+                if self.ffmpeg.is_some() && inspect.facts.is_some() {
                     ACTION_TALL
                 } else {
                     0.0
                 }
             }
-            Stage::Working(working) => {
-                if working.fallback {
-                    ACTION_SHORT
-                } else {
-                    // The abandon button carries a sentence under it.
-                    ACTION_SHORT + space::TIGHT + LINE_H
-                }
-            }
-            // Show-in-folder is a primary button, so the bar is the tall one.
-            Stage::Finished(_) => ACTION_TALL,
+            // Stopping is always safe now: Phase A's material exists before
+            // Phase B ever starts, so there is no "you will lose everything"
+            // sentence to make room for.
+            Stage::Working(_) => ACTION_SHORT,
+            Stage::Bench(_) => ACTION_TALL,
         }
     }
 
     fn body(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         match &mut self.stage {
             Stage::Empty => {
-                if let Some(picked) = drop_zone(ui, self.lang, ctx) {
+                let trouble = self.trouble.clone();
+                if let Some(picked) = drop_zone(ui, self.lang, ctx, trouble.as_deref()) {
                     self.pending = Some(picked);
                 }
             }
-            Stage::Loaded(_) => self.loaded(ui, ctx),
+            Stage::Inspect(_) => self.inspect(ui, ctx),
             Stage::Working(_) => self.working(ui),
-            Stage::Finished(_) => self.finished(ui),
+            Stage::Bench(_) => self.bench(ui),
         }
     }
 
@@ -320,66 +410,98 @@ impl Press {
         let lang = self.lang;
         match &self.stage {
             Stage::Empty => {}
-            Stage::Loaded(loaded) => {
-                if self.ffmpeg.is_some() && loaded.facts.is_some() {
+            Stage::Inspect(inspect) => {
+                if self.ffmpeg.is_some() && inspect.facts.is_some() {
                     ui.vertical_centered(|ui| {
                         if theme::primary(ui, text::START.get(lang)).clicked() {
-                            self.begin();
+                            self.start_phase_a();
                         }
                     });
                 }
             }
-            // "Stop waiting, use what we have" is offered ONLY when there is
-            // something to use: every gate constraint already met by the exact
-            // copy, and the encode running purely to make it smaller. Everywhere
-            // else the encode is the fix, and the button says so.
             Stage::Working(working) => {
-                let fallback = working.fallback;
-                let label = if fallback {
-                    &text::CANCEL_KEEP
-                } else {
-                    &text::CANCEL_ABANDON
-                };
                 let cancel = working.cancel.clone();
                 ui.vertical_centered(|ui| {
-                    if theme::quiet(ui, label.get(lang)).clicked() {
+                    if theme::quiet(ui, text::STOP.get(lang)).clicked() {
                         cancel.request();
-                    }
-                    if !fallback {
-                        ui.add_space(space::TIGHT);
-                        theme::muted(ui, text::CANCEL_ABANDON_HINT.get(lang));
                     }
                 });
             }
-            Stage::Finished(finished) => {
-                let produced = match &finished.outcome {
-                    Outcome::Produced(produced) => Some(produced.path.clone()),
-                    _ => None,
-                };
-                let mut again = false;
-                let mut reveal_it = None;
+            Stage::Bench(bench) => {
+                let ready = bench.pending().is_empty();
+                let runnable = bench.worth_running();
+                let stuck = matches!(bench.said, Some(Said::StillTooLarge { .. }));
+                let saved = bench.saved.clone();
+                let mut pressed = None;
+
                 // A row, centred properly. `vertical_centered` centres a single
                 // widget but not a `horizontal` inside it -- the row claims the
-                // full width and its contents start hard against the left edge,
-                // which is where these two buttons were sitting.
-                centred_row(ui, "finished-actions", |ui| {
-                    // Opening the folder is what the charter does NEXT: the file
-                    // exists to be uploaded. So it is the loud one, and it also
-                    // gives the emptiest screen in the window something to look
-                    // at besides two grey pills in a corner.
-                    if let Some(path) = produced
-                        && theme::primary(ui, text::SHOW_IN_FOLDER.get(lang)).clicked()
-                    {
-                        reveal_it = Some(path);
+                // full width and its contents start hard against the left edge.
+                centred_row(ui, "bench-actions", |ui| {
+                    if theme::quiet(ui, text::ABANDON.get(lang)).clicked() {
+                        pressed = Some(Act::Abandon);
                     }
-                    again = theme::quiet(ui, text::ANOTHER.get(lang)).clicked();
+                    // Only where it is actionable: the message above says to
+                    // trim it shorter, and without this there is nowhere to do
+                    // that but drag the file in again.
+                    if stuck && theme::quiet(ui, text::BACK_TO_TRIM.get(lang)).clicked() {
+                        pressed = Some(Act::BackToTrim);
+                    }
+                    // Hidden when stuck: the search already went to the coarsest
+                    // quality there is, so pressing again would spend minutes
+                    // reaching the same answer. The way out is a shorter video.
+                    if runnable.is_some() && !stuck {
+                        // Loud only when it is the thing standing between the
+                        // charter and a file they can upload. Once the file is
+                        // already good, "make it smaller" is an option, not the
+                        // point.
+                        let label = if ready {
+                            text::SHRINK_FURTHER.get(lang)
+                        } else {
+                            text::START.get(lang)
+                        };
+                        let hit = if ready {
+                            theme::quiet(ui, label).clicked()
+                        } else {
+                            theme::primary(ui, label).clicked()
+                        };
+                        if hit {
+                            pressed = Some(Act::Run);
+                        }
+                    }
+                    if ready && theme::primary(ui, text::SAVE.get(lang)).clicked() {
+                        pressed = Some(Act::Save);
+                    }
+                    // Only once there is somewhere to go. Uploading is the next
+                    // thing that happens, and it starts in a file manager.
+                    if ready
+                        && saved.is_some()
+                        && theme::quiet(ui, text::SHOW_IN_FOLDER.get(lang)).clicked()
+                    {
+                        pressed = Some(Act::Reveal);
+                    }
                 });
-                if let Some(path) = reveal_it {
-                    reveal(&path);
-                }
-                if again {
-                    self.stage = Stage::Empty;
-                    self.texture = None;
+
+                match pressed {
+                    Some(Act::Abandon) => {
+                        // Dropping the stage drops the Arc, and the last Arc
+                        // takes the temp directory with it.
+                        self.stage = Stage::Empty;
+                        self.texture = None;
+                    }
+                    Some(Act::BackToTrim) => self.back_to_inspect(),
+                    Some(Act::Run) => {
+                        if let Some(aim) = runnable {
+                            self.start_phase_b(aim);
+                        }
+                    }
+                    Some(Act::Save) => self.save(),
+                    Some(Act::Reveal) => {
+                        if let Some(to) = saved {
+                            reveal(&to);
+                        }
+                    }
+                    None => {}
                 }
             }
         }
@@ -443,6 +565,9 @@ impl Press {
 
     fn load(&mut self, path: &Path) {
         self.loads += 1;
+        // A new file is a new situation; whatever went wrong with the last one
+        // is no longer news.
+        self.trouble = None;
         self.texture = None;
         self.shown_pts = f64::NAN;
 
@@ -451,7 +576,7 @@ impl Press {
             return;
         };
         let source_bytes = bytes.len() as u64;
-        let (facts, verdict) = gate::judge(&bytes);
+        let (facts, _) = gate::judge(&bytes);
         drop(bytes);
 
         let preview = match (&facts, &self.ffmpeg) {
@@ -465,11 +590,10 @@ impl Press {
             _ => None,
         };
 
-        self.stage = Stage::Loaded(Box::new(Loaded {
+        self.stage = Stage::Inspect(Box::new(Inspect {
             path: path.to_path_buf(),
-            source_bytes,
+            bytes: source_bytes,
             facts,
-            verdict,
             preview,
             at: 0.0,
             trim: Trim::default(),
@@ -478,7 +602,7 @@ impl Press {
 
     /// Drain the worker and keep the window repainting while anything moves.
     fn pump(&mut self, ctx: &egui::Context) {
-        if let Stage::Loaded(loaded) = &mut self.stage
+        if let Stage::Inspect(loaded) = &mut self.stage
             && let Some(preview) = &loaded.preview
         {
             // Decoded frames arrive on a worker thread, and egui only redraws
@@ -518,27 +642,20 @@ impl Press {
 
         loop {
             match working.inbox.try_recv() {
-                Ok(Note::At(step)) => {
-                    if let Step::Encoding { fallback, .. } = &step {
-                        working.fallback = *fallback;
-                    }
-                    working.step = step;
+                Ok(Note::Step(phase)) => working.phase = phase,
+                Ok(Note::SettledA(outcome)) => {
+                    self.finish_phase_a(*outcome);
+                    return;
                 }
-                Ok(Note::Done(outcome)) => {
-                    self.stage = Stage::Finished(Box::new(Finished {
-                        source_bytes: working.source_bytes,
-                        outcome: *outcome,
-                    }));
+                Ok(Note::FittedB(outcome)) => {
+                    self.finish_phase_b(*outcome);
                     return;
                 }
                 // The worker vanished without a verdict. It cannot, but a window
                 // that spins forever on a broken invariant is worse than one that
                 // says so.
                 Err(TryRecvError::Disconnected) => {
-                    self.stage = Stage::Finished(Box::new(Finished {
-                        source_bytes: working.source_bytes,
-                        outcome: Outcome::Failed("the worker stopped unexpectedly".to_owned()),
-                    }));
+                    self.give_up("the worker stopped unexpectedly");
                     return;
                 }
                 Err(TryRecvError::Empty) => return,
@@ -546,79 +663,307 @@ impl Press {
         }
     }
 
-    fn begin(&mut self) {
-        let Stage::Loaded(loaded) = &self.stage else {
+    /// Phase A: the deterministic pass. Nothing is asked of the charter here --
+    /// every answer follows from the file.
+    fn start_phase_a(&mut self) {
+        let Stage::Inspect(inspect) = &self.stage else {
             return;
         };
-        let Some(ffmpeg) = self.ffmpeg.clone() else {
+        let (Some(ffmpeg), Some(facts)) = (self.ffmpeg.clone(), inspect.facts.clone()) else {
             return;
         };
-        let Some(_facts) = loaded.facts.clone() else {
-            return;
+        let source = inspect.path.clone();
+        let held = Held {
+            source_bytes: inspect.bytes,
+            source_facts: facts.clone(),
+            trim: inspect.trim,
+            material: None,
+            encoded: None,
         };
-        // Copied out before anything else, so the borrow on the stage ends here
-        // and the run can replace it.
-        let source = loaded.path.clone();
-        let source_bytes = loaded.source_bytes;
-        let trim = loaded.trim;
 
-        // WHERE IT GOES IS THE CHARTER'S CHOICE. Press used to write `video.mp4`
-        // beside the source without asking, which silently destroyed any file
-        // already sitting there -- including, on a second run, its own previous
-        // result. The system dialog handles the overwrite question itself, in
-        // the charter's own Windows language, and it is the one prompt they
-        // already trust.
-        let Some(output) = rfd::FileDialog::new()
-            .set_title(text::SAVE_TITLE.get(self.lang))
-            .set_directory(source.parent().unwrap_or(Path::new(".")))
-            .set_file_name("video.mp4")
-            .add_filter("MP4", &["mp4"])
-            .save_file()
-        else {
-            // Cancelled the dialog: nothing has happened, and the file stays
-            // loaded exactly as it was.
-            return;
+        let work = match Workspace::open() {
+            Ok(work) => Arc::new(work),
+            Err(error) => {
+                self.give_up(&format!("no temporary directory to work in: {error}"));
+                return;
+            }
         };
-        // ffmpeg cannot read and write the same file, and a charter who picks
-        // the source as the destination has asked for their original to be
-        // destroyed by a process that would fail halfway through doing it.
-        if same_file(&source, &output) {
-            self.stage = Stage::Finished(Box::new(Finished {
-                source_bytes,
-                outcome: Outcome::Failed(
-                    "the result cannot be written over the file being read".to_owned(),
-                ),
-            }));
-            return;
-        }
 
         let cancel = Cancel::new();
         let (tx, inbox) = channel();
-
         std::thread::spawn({
             let cancel = cancel.clone();
             let source = source.clone();
+            let work = Arc::clone(&work);
+            let bytes = held.source_bytes;
+            let trim = held.trim;
             move || {
                 let tx2 = tx.clone();
-                let outcome =
-                    standardise::standardise(&ffmpeg, &source, &output, trim, &cancel, |step| {
-                        let _ = tx2.send(Note::At(step));
-                    });
-                let _ = tx.send(Note::Done(Box::new(outcome)));
+                let outcome = phase_a::run(
+                    &ffmpeg,
+                    &source,
+                    &facts,
+                    bytes,
+                    trim,
+                    &work,
+                    &cancel,
+                    |step| {
+                        let _ = tx2.send(Note::Step(Phase::A(step)));
+                    },
+                );
+                let _ = tx.send(Note::SettledA(Box::new(outcome)));
             }
         });
 
         self.stage = Stage::Working(Box::new(Working {
-            path: source,
-            source_bytes,
+            source,
+            phase: Phase::A(phase_a::Step::Reading),
             cancel,
             inbox,
-            step: Step::Reading,
-            // Nothing has been produced yet, so stopping now leaves nothing.
-            // The worker corrects this the moment it knows better.
-            fallback: false,
+            work,
+            held,
         }));
     }
+
+    fn finish_phase_a(&mut self, outcome: phase_a::Outcome) {
+        let Stage::Working(working) = &mut self.stage else {
+            return;
+        };
+        match outcome {
+            phase_a::Outcome::Settled(material) => {
+                working.held.material = Some(material);
+                self.show_bench(None);
+            }
+            // Nothing was produced and nothing was lost, so the charter goes
+            // back to exactly where they pressed the button -- trim included.
+            phase_a::Outcome::Cancelled => self.back_to_inspect_from_work(),
+            phase_a::Outcome::Failed(reason) => self.give_up(&reason),
+        }
+    }
+
+    /// Phase B: the fight with 80 MB. `aim` is what the bench decided it is for.
+    fn start_phase_b(&mut self, aim: Aim) {
+        if !matches!(self.stage, Stage::Bench(_)) {
+            return;
+        }
+        let Some(ffmpeg) = self.ffmpeg.clone() else {
+            return;
+        };
+        let Stage::Bench(bench) = std::mem::replace(&mut self.stage, Stage::Empty) else {
+            unreachable!("checked above");
+        };
+        let bench = *bench;
+        let opening_cut = bench.opening_cut;
+        let work = Arc::clone(&bench.work);
+
+        // The worker gets its own copy. `Material` is a path and some numbers,
+        // so this costs nothing and it means no lifetime has to cross a thread
+        // boundary for the sake of a struct that could have been cloned.
+        let material = (*bench.material).clone();
+
+        let cancel = Cancel::new();
+        let (tx, inbox) = channel();
+        std::thread::spawn({
+            let cancel = cancel.clone();
+            let work = Arc::clone(&work);
+            move || {
+                let tx2 = tx.clone();
+                let outcome = phase_b::run(
+                    &ffmpeg,
+                    &material,
+                    aim,
+                    opening_cut,
+                    &work,
+                    &cancel,
+                    |step| {
+                        let _ = tx2.send(Note::Step(Phase::B(step)));
+                    },
+                );
+                let _ = tx.send(Note::FittedB(Box::new(outcome)));
+            }
+        });
+
+        self.stage = Stage::Working(Box::new(Working {
+            source: bench.source,
+            phase: Phase::B(phase_b::Step::Encoding {
+                crf: crate::plan::CRF,
+                attempt: 1,
+                progress: None,
+            }),
+            cancel,
+            inbox,
+            work,
+            held: Held {
+                source_bytes: bench.source_bytes,
+                source_facts: bench.source_facts,
+                trim: Trim {
+                    cut_opening: opening_cut,
+                    keep_until: None,
+                },
+                material: Some(bench.material),
+                encoded: bench.encoded,
+            },
+        }));
+    }
+
+    fn finish_phase_b(&mut self, outcome: phase_b::Outcome) {
+        let Stage::Working(working) = &mut self.stage else {
+            return;
+        };
+        let said = match outcome {
+            // A better file. Anything Phase B produced before it is superseded,
+            // and the workspace will take the loser with it.
+            phase_b::Outcome::Encoded(done) => {
+                working.held.encoded = Some(done);
+                None
+            }
+            phase_b::Outcome::MaterialWins { av1_was } => Some(Said::MaterialWins { av1_was }),
+            phase_b::Outcome::StillTooLarge { smallest } => Some(Said::StillTooLarge { smallest }),
+            phase_b::Outcome::Cancelled => Some(Said::Cancelled),
+            phase_b::Outcome::Failed(reason) => Some(Said::Failed(reason)),
+        };
+        self.show_bench(said);
+    }
+
+    /// Rebuild the bench from the run that just finished.
+    fn show_bench(&mut self, said: Option<Said>) {
+        let Stage::Working(working) = std::mem::replace(&mut self.stage, Stage::Empty) else {
+            return;
+        };
+        let working = *working;
+        let Some(material) = working.held.material else {
+            // Only reachable if Phase A reported success without a material,
+            // which it cannot.
+            self.give_up("the run finished without producing anything");
+            return;
+        };
+        self.stage = Stage::Bench(Box::new(Bench {
+            source: working.source,
+            source_bytes: working.held.source_bytes,
+            source_facts: working.held.source_facts,
+            opening_cut: working.held.trim.cut_opening,
+            material,
+            encoded: working.held.encoded,
+            said,
+            saved: None,
+            work: working.work,
+        }));
+    }
+
+    /// Write the current best somewhere the charter chooses.
+    ///
+    /// This is the ONLY moment a destination is asked for. Everything before it
+    /// went to a temp directory under a name nobody had to approve -- asking
+    /// where to put a file that might never exist is the wrong question at the
+    /// wrong time, and answering it early is how Press used to overwrite
+    /// whatever was already called `video.mp4`.
+    fn save(&mut self) {
+        let Stage::Bench(bench) = &self.stage else {
+            return;
+        };
+        let (from, _, _) = bench.have();
+        let from = from.to_path_buf();
+        let Some(to) = rfd::FileDialog::new()
+            .set_title(text::SAVE_TITLE.get(self.lang))
+            .set_directory(bench.source.parent().unwrap_or(Path::new(".")))
+            .set_file_name("video.mp4")
+            .add_filter("MP4", &["mp4"])
+            .save_file()
+        else {
+            return;
+        };
+        if same_file(&from, &to) {
+            return;
+        }
+        // Copied rather than renamed: the workspace lives on the temp volume,
+        // which is usually not the volume the charter picked. The system dialog
+        // has already asked about overwriting, in their own Windows language.
+        match std::fs::copy(&from, &to) {
+            Ok(_) => {
+                if let Stage::Bench(bench) = &mut self.stage {
+                    bench.saved = Some(to);
+                }
+            }
+            Err(error) => self.give_up(&format!("could not write the result: {error}")),
+        }
+    }
+
+    /// Something went wrong that no screen can offer a next step for.
+    fn give_up(&mut self, reason: &str) {
+        self.trouble = Some(reason.to_owned());
+        self.stage = Stage::Empty;
+        self.texture = None;
+    }
+
+    /// Back to the scrubber from a cancelled run, with the trim intact.
+    fn back_to_inspect_from_work(&mut self) {
+        let Stage::Working(working) = std::mem::replace(&mut self.stage, Stage::Empty) else {
+            return;
+        };
+        let working = *working;
+        self.reopen(
+            working.source,
+            working.held.source_bytes,
+            working.held.source_facts,
+            working.held.trim,
+        );
+    }
+
+    /// Back to the scrubber from the bench, keeping the opening cut so the
+    /// advice to "trim it shorter" has somewhere to be taken.
+    fn back_to_inspect(&mut self) {
+        let Stage::Bench(bench) = std::mem::replace(&mut self.stage, Stage::Empty) else {
+            return;
+        };
+        let bench = *bench;
+        self.reopen(
+            bench.source,
+            bench.source_bytes,
+            bench.source_facts,
+            Trim {
+                cut_opening: bench.opening_cut,
+                keep_until: None,
+            },
+        );
+    }
+
+    fn reopen(&mut self, source: PathBuf, bytes: u64, facts: Facts, trim: Trim) {
+        let preview = self.ffmpeg.as_ref().map(|ffmpeg| {
+            let preview = Preview::open(
+                ffmpeg.binary(),
+                &source,
+                facts.width,
+                facts.height,
+                facts.fps,
+            );
+            preview.seek(0.0);
+            preview
+        });
+        self.texture = None;
+        self.shown_pts = f64::NAN;
+        self.stage = Stage::Inspect(Box::new(Inspect {
+            path: source,
+            bytes,
+            facts: Some(facts),
+            preview,
+            at: 0.0,
+            trim,
+        }));
+    }
+}
+
+/// What a run carries on behalf of the screen that comes after it.
+///
+/// The worker knows nothing about screens, and the screen it came from is gone
+/// while it runs -- so everything the next one needs travels with the run.
+struct Held {
+    source_bytes: u64,
+    source_facts: Facts,
+    trim: Trim,
+    /// Phase A's output. `None` only while Phase A is still producing it.
+    material: Option<Box<Material>>,
+    /// The best Phase B result so far, kept across a run that does worse.
+    encoded: Option<Box<Encoded>>,
 }
 
 /// Whether two paths name the same file on disk.
@@ -637,7 +982,12 @@ fn same_file(a: &Path, b: &Path) -> bool {
 
 /// Fills the body, because there is nothing else in it and a drop target that
 /// does not look like the whole window is a smaller target than it needs to be.
-fn drop_zone(ui: &mut egui::Ui, lang: Lang, ctx: &egui::Context) -> Option<PathBuf> {
+fn drop_zone(
+    ui: &mut egui::Ui,
+    lang: Lang,
+    ctx: &egui::Context,
+    trouble: Option<&str>,
+) -> Option<PathBuf> {
     let hovering = ctx.input(|i| !i.raw.hovered_files.is_empty());
     let (rect, response) = ui.allocate_exact_size(ui.available_size(), egui::Sense::click());
     // Windows refuses to let a medium-integrity Explorer drop onto a high-
@@ -702,6 +1052,19 @@ fn drop_zone(ui: &mut egui::Ui, lang: Lang, ctx: &egui::Context) -> Option<PathB
         );
     }
 
+    // A run that ended somewhere no screen can offer a next step from. It says
+    // so HERE rather than nowhere -- dropping someone back to an empty window
+    // with no explanation is the failure mode that sends them hunting.
+    if let Some(reason) = trouble {
+        wrapped_centre(
+            ui,
+            rect.center() + egui::vec2(0.0, space::SECTION * 2.0),
+            reason,
+            theme::ALARM,
+            rect.width().min(520.0),
+        );
+    }
+
     // Handed back rather than loaded here, so a picked file and a dropped one
     // take the same path in. The click works whatever the integrity level is,
     // which is the whole reason the elevated case has something to say.
@@ -735,12 +1098,12 @@ fn wrapped_centre(
 }
 
 impl Press {
-    fn loaded(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+    fn inspect(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         self.refresh_texture(ctx);
         let lang = self.lang;
         let texture = self.texture.clone();
         let no_encoder = self.ffmpeg.is_none();
-        let Stage::Loaded(loaded) = &mut self.stage else {
+        let Stage::Inspect(loaded) = &mut self.stage else {
             return;
         };
 
@@ -761,7 +1124,7 @@ impl Press {
     }
 
     fn refresh_texture(&mut self, ctx: &egui::Context) {
-        let Stage::Loaded(loaded) = &self.stage else {
+        let Stage::Inspect(loaded) = &self.stage else {
             return;
         };
         let Some(preview) = &loaded.preview else {
@@ -796,33 +1159,39 @@ impl Press {
             return;
         };
 
-        let (label, fraction, written) = match &working.step {
-            Step::Reading => (text::READING.get(lang).to_owned(), None, None),
-            Step::Copying(p) => (
+        let (label, fraction, written) = match &working.phase {
+            Phase::A(phase_a::Step::Reading) => (text::READING.get(lang).to_owned(), None, None),
+            Phase::A(phase_a::Step::Copying(p)) => (
                 text::STEP_COPYING.get(lang).to_owned(),
                 p.and_then(|p| p.fraction),
                 p.map(|p| p.bytes),
             ),
-            Step::Encoding {
-                progress, fallback, ..
-            } => {
+            Phase::A(phase_a::Step::Verifying) | Phase::B(phase_b::Step::Verifying) => {
+                (text::STEP_VERIFYING.get(lang).to_owned(), None, None)
+            }
+            Phase::B(phase_b::Step::Encoding { crf, progress, .. }) => {
                 let fraction = progress.and_then(|p| p.fraction);
-                let template = if *fallback {
-                    &text::STEP_ENCODING
-                } else {
-                    &text::STEP_ENCODING_FORCED
-                };
                 let percent =
                     fraction.map_or_else(|| "…".to_owned(), |f| format!("{:.0}%", f * 100.0));
                 (
-                    template.get(lang).replace("{percent}", &percent),
+                    text::STEP_ENCODING
+                        .get(lang)
+                        .replace("{percent}", &percent)
+                        .replace("{crf}", &crf.to_string()),
                     fraction,
                     progress.map(|p| p.bytes),
                 )
             }
-            Step::Verifying => (text::STEP_VERIFYING.get(lang).to_owned(), None, None),
+            Phase::B(phase_b::Step::Recalibrating { from, to }) => (
+                text::STEP_RECALIBRATING
+                    .get(lang)
+                    .replace("{from}", &from.to_string())
+                    .replace("{to}", &to.to_string()),
+                None,
+                None,
+            ),
         };
-        let name = working.path.to_string_lossy().into_owned();
+        let name = working.source.to_string_lossy().into_owned();
 
         centred(ui, "working", |ui| {
             theme::card(ui, |ui| {
@@ -867,73 +1236,222 @@ impl Press {
         });
     }
 
-    fn finished(&mut self, ui: &mut egui::Ui) {
+    /// The hub between the phases: what we have, and what is still wrong.
+    ///
+    /// Two columns, like the inspect screen and for the same reason -- the left
+    /// is what happened, the right is what it means. A single centred card was
+    /// what the old finished screen used, and on a fixed canvas it left most of
+    /// the window empty while the important half was a footnote.
+    fn bench(&mut self, ui: &mut egui::Ui) {
         let lang = self.lang;
-        let Stage::Finished(finished) = &self.stage else {
+        let Stage::Bench(bench) = &self.stage else {
             return;
         };
-        let source_bytes = finished.source_bytes;
+        let pending = bench.pending();
+        let (path, bytes, facts) = bench.have();
 
-        centred(ui, "finished", |ui| {
-            theme::card(ui, |ui| {
-                ui.set_width(ui.available_width());
-                match &finished.outcome {
-                    Outcome::Produced(produced) => {
-                        theme::heading(ui, text::DONE.get(lang), theme::GOOD);
-                        ui.add_space(space::TIGHT);
-                        ui.label(
-                            text::DONE_SIZE
-                                .get(lang)
-                                .replace("{before}", &megabytes(source_bytes))
-                                .replace("{after}", &megabytes(produced.bytes)),
-                        );
-                        // Where it went, in full. The next thing the charter
-                        // does is find this file and upload it, so "it worked"
-                        // without an address is half an answer.
-                        ui.add_space(space::ROW);
-                        theme::muted(ui, text::SAVED_TO.get(lang));
+        let body = ui.max_rect();
+        let left = egui::Rect::from_min_max(
+            body.min,
+            egui::pos2(body.left() + WORKBENCH_W, body.bottom()),
+        );
+        let right =
+            egui::Rect::from_min_max(egui::pos2(body.right() - READOUT_W, body.top()), body.max);
+
+        region(ui, left, |ui| {
+            theme::card_of_height(ui, left.height(), |ui| {
+                if pending.is_empty() {
+                    theme::heading(ui, text::BENCH_READY.get(lang), theme::GOOD);
+                } else {
+                    theme::heading(ui, text::BENCH_REMAINING.get(lang), theme::NOTICE);
+                }
+                ui.add_space(space::TIGHT);
+                theme::muted(ui, &shape(facts, bytes));
+
+                ui.add_space(space::TIGHT);
+                let allowance = bytes as f64 / limits::MAX_BYTES as f64 * 100.0;
+                ui.label(
+                    egui::RichText::new(
+                        text::BENCH_SIZE
+                            .get(lang)
+                            .replace("{before}", &megabytes(bench.source_bytes))
+                            .replace("{after}", &megabytes(bytes))
+                            .replace("{percent}", &format!("{allowance:.0}"))
+                            .replace("{limit}", &megabytes(limits::MAX_BYTES)),
+                    )
+                    .size(theme::size::SMALL)
+                    .color(theme::INK),
+                );
+
+                // The parameters, plainly. There is no knob for them -- Press
+                // decides -- so the least it owes the charter is to say what it
+                // decided and why the file weighs what it weighs.
+                if let Some(done) = &bench.encoded {
+                    ui.add_space(space::TIGHT);
+                    theme::muted(
+                        ui,
+                        &text::RESULT_RECIPE
+                            .get(lang)
+                            .replace("{crf}", &done.crf.to_string())
+                            .replace("{encodes}", &done.encodes.max(1).to_string()),
+                    );
+                }
+
+                ui.add_space(space::BLOCK);
+                theme::muted(ui, text::DIFF_HEADING.get(lang));
+                ui.add_space(space::TIGHT);
+                let did = diff_lines(bench, lang);
+                if did.is_empty() {
+                    theme::muted(ui, text::DIFF_NOTHING.get(lang));
+                } else {
+                    for line in did {
                         ui.add_space(2.0);
-                        theme::path(ui, &produced.path.to_string_lossy());
-                        for line in outcome_notes(produced, lang) {
-                            ui.add_space(space::TIGHT);
-                            theme::muted(ui, &line);
-                        }
+                        ui.label(egui::RichText::new(line).color(theme::INK));
                     }
-                    Outcome::AlreadyStandard => {
-                        theme::heading(ui, text::ALREADY_STANDARD.get(lang), theme::GOOD);
-                    }
-                    Outcome::Cancelled => {
-                        theme::heading(ui, text::CANCELLED.get(lang), theme::INK_MUTED);
-                    }
-                    // Amber, not red: nothing went wrong, the video is simply
-                    // longer than 80 MB of anything watchable. Red would say
-                    // Press broke, and it did not.
-                    Outcome::StillTooLarge { smallest } => {
-                        theme::heading(ui, text::STILL_TOO_LARGE.get(lang), theme::NOTICE);
-                        ui.add_space(space::TIGHT);
-                        ui.add(egui::Label::new(
-                            egui::RichText::new(
-                                text::STILL_TOO_LARGE_DETAIL
-                                    .get(lang)
-                                    .replace("{size}", &smallest.div_ceil(1024 * 1024).to_string())
-                                    .replace(
-                                        "{limit}",
-                                        &limits::MAX_BYTES.div_ceil(1024 * 1024).to_string(),
-                                    ),
-                            )
-                            .size(theme::size::SMALL),
-                        ));
-                    }
-                    Outcome::Failed(reason) => {
-                        theme::heading(ui, text::FAILED.get(lang), theme::ALARM);
-                        ui.add_space(space::TIGHT);
-                        ui.add(egui::Label::new(
-                            egui::RichText::new(reason).size(theme::size::SMALL),
-                        ));
-                    }
+                }
+
+                if bench.saved.is_some() || bench.said.is_some() {
+                    ui.add_space(space::BLOCK);
+                }
+                if let Some(said) = &bench.said {
+                    said_line(ui, lang, said);
+                }
+                if let Some(to) = &bench.saved {
+                    ui.add_space(space::TIGHT);
+                    theme::muted(ui, text::SAVED_TO.get(lang));
+                    ui.add_space(2.0);
+                    theme::path(ui, &to.to_string_lossy());
                 }
             });
         });
+
+        region(ui, right, |ui| {
+            theme::card_of_height(ui, right.height(), |ui| {
+                theme::path(ui, &path.to_string_lossy());
+                ui.add_space(space::BLOCK);
+                if pending.is_empty() {
+                    theme::heading(ui, text::PHASE_A_CLEAR.get(lang), theme::GOOD);
+                    return;
+                }
+                theme::muted(ui, text::PENDING_HEADING.get(lang));
+                for (what, fix) in pending_lines(&pending, lang) {
+                    ui.add_space(space::ROW);
+                    ui.horizontal_top(|ui| {
+                        ui.label(egui::RichText::new("•").color(theme::NOTICE));
+                        ui.vertical(|ui| {
+                            ui.label(egui::RichText::new(what).color(theme::INK));
+                            ui.add_space(2.0);
+                            theme::muted(ui, &fix);
+                        });
+                    });
+                }
+            });
+        });
+    }
+}
+
+/// What the lossless pass actually did, in the charter's language.
+fn diff_lines(bench: &Bench, lang: Lang) -> Vec<String> {
+    bench
+        .material
+        .applied
+        .iter()
+        .map(|applied| match applied {
+            Applied::AudioDropped => text::DIFF_AUDIO.get(lang).to_owned(),
+            Applied::TailCut { was, now } => text::DIFF_TAIL
+                .get(lang)
+                .replace("{was}", &clock(*was))
+                .replace("{now}", &clock(*now)),
+        })
+        .collect()
+}
+
+/// What is still wrong, and what the next pass will do about it.
+fn pending_lines(pending: &[Pending], lang: Lang) -> Vec<(String, String)> {
+    pending
+        .iter()
+        .map(|item| match item {
+            Pending::Scale { from, to } => (
+                text::FINDING_RESOLUTION
+                    .get(lang)
+                    .replace("{width}", &from.0.to_string())
+                    .replace("{height}", &from.1.to_string()),
+                text::FIX_RESOLUTION
+                    .get(lang)
+                    .replace("{width}", &to.0.to_string())
+                    .replace("{height}", &to.1.to_string()),
+            ),
+            Pending::FrameRate { from, to } => (
+                text::FINDING_FPS
+                    .get(lang)
+                    .replace("{fps}", &from.to_string())
+                    .replace("{limit}", &to.to_string()),
+                text::FIX_FPS.get(lang).replace("{limit}", &to.to_string()),
+            ),
+            Pending::Codec { from } => (
+                text::FINDING_CODEC.get(lang).replace("{codec}", from),
+                text::FIX_CODEC.get(lang).to_owned(),
+            ),
+            Pending::OpeningCut { seconds } => (
+                text::TRIM_HEAD_WARNING
+                    .get(lang)
+                    .replace("{shift}", &clock(*seconds)),
+                text::TRIM_HEAD_COSTS_REENCODE.get(lang).to_owned(),
+            ),
+            Pending::TooLarge { now, limit } => (
+                text::FINDING_TOO_LARGE
+                    .get(lang)
+                    .replace("{size}", &now.div_ceil(1024 * 1024).to_string())
+                    .replace("{limit}", &limit.div_ceil(1024 * 1024).to_string()),
+                text::FIX_SIZE
+                    .get(lang)
+                    .replace("{limit}", &limit.div_ceil(1024 * 1024).to_string()),
+            ),
+        })
+        .collect()
+}
+
+/// What the last Phase B run concluded. Amber for "nothing went wrong but you
+/// should know"; red only for a genuine failure.
+fn said_line(ui: &mut egui::Ui, lang: Lang, said: &Said) {
+    match said {
+        Said::MaterialWins { av1_was } => {
+            ui.add(egui::Label::new(
+                egui::RichText::new(text::SAID_MATERIAL_WINS.get(lang))
+                    .size(theme::size::SMALL)
+                    .color(theme::INK_MUTED),
+            ));
+            // The number it lost by. Press made a choice on the charter's
+            // behalf; the least it can do is show its working.
+            if let Some(was) = av1_was {
+                ui.add_space(2.0);
+                theme::muted(ui, &format!("AV1: {}", megabytes(*was)));
+            }
+        }
+        Said::StillTooLarge { smallest } => {
+            theme::heading(ui, text::STILL_TOO_LARGE.get(lang), theme::NOTICE);
+            ui.add_space(space::TIGHT);
+            ui.add(egui::Label::new(
+                egui::RichText::new(
+                    text::STILL_TOO_LARGE_DETAIL
+                        .get(lang)
+                        .replace("{size}", &smallest.div_ceil(1024 * 1024).to_string())
+                        .replace(
+                            "{limit}",
+                            &limits::MAX_BYTES.div_ceil(1024 * 1024).to_string(),
+                        ),
+                )
+                .size(theme::size::SMALL),
+            ));
+        }
+        Said::Cancelled => theme::muted(ui, text::CANCELLED.get(lang)),
+        Said::Failed(reason) => {
+            theme::heading(ui, text::FAILED.get(lang), theme::ALARM);
+            ui.add_space(space::TIGHT);
+            ui.add(egui::Label::new(
+                egui::RichText::new(reason).size(theme::size::SMALL),
+            ));
+        }
     }
 }
 
@@ -1031,7 +1549,7 @@ const ROW_H: f32 = 34.0;
 fn workbench_column(
     ui: &mut egui::Ui,
     lang: Lang,
-    loaded: &mut Loaded,
+    loaded: &mut Inspect,
     texture: Option<&egui::TextureHandle>,
 ) {
     let column = ui.max_rect();
@@ -1078,11 +1596,11 @@ fn viewport(ui: &mut egui::Ui, texture: Option<&egui::TextureHandle>, room: egui
 
 /// Transport, timeline and what the trim currently means. Written bottom-up so
 /// it can be dropped into a bottom-up layout unchanged.
-fn transport(ui: &mut egui::Ui, lang: Lang, loaded: &mut Loaded) {
+fn transport(ui: &mut egui::Ui, lang: Lang, loaded: &mut Inspect) {
     // Destructured so the preview, the position and the trim are three separate
     // borrows: the transport reads one and writes the others in the same breath,
     // which through `loaded.` alone the compiler cannot allow.
-    let Loaded {
+    let Inspect {
         facts,
         preview,
         at,
@@ -1183,7 +1701,7 @@ fn transport(ui: &mut egui::Ui, lang: Lang, loaded: &mut Loaded) {
 }
 
 /// The findings, and what is about to be done about each of them.
-fn verdict_card(ui: &mut egui::Ui, lang: Lang, loaded: &Loaded, tall: f32, no_encoder: bool) {
+fn verdict_card(ui: &mut egui::Ui, lang: Lang, loaded: &Inspect, tall: f32, no_encoder: bool) {
     let opening = loaded.trim.cut_opening;
     theme::card_of_height(ui, tall, |ui| {
         // The WHOLE path, wrapped. A charter with three exports of the same
@@ -1198,19 +1716,28 @@ fn verdict_card(ui: &mut egui::Ui, lang: Lang, loaded: &Loaded, tall: f32, no_en
             return;
         };
 
-        if loaded.verdict.passes() {
-            theme::heading(ui, text::VERDICT_OK.get(lang), theme::GOOD);
+        // SIZE IS NOT MENTIONED HERE, and its absence is the whole point of the
+        // phase split. Whether this video fits in 80 MB is not a deterministic
+        // question -- it depends on how compressible the footage turns out to
+        // be, which nothing short of encoding it will say. Naming it on a screen
+        // where every other line is settled would promise an answer Press does
+        // not have yet.
+        let deterministic = findings(facts, lang);
+        if deterministic.is_empty() {
+            theme::heading(ui, text::PHASE_A_CLEAR.get(lang), theme::GOOD);
+            ui.add_space(space::TIGHT);
+            theme::muted(ui, text::PHASE_A_CLEAR_HINT.get(lang));
         } else {
             theme::heading(ui, text::VERDICT_WILL_FIX.get(lang), theme::NOTICE);
         }
         ui.add_space(space::TIGHT);
-        theme::muted(ui, &shape(facts, loaded.source_bytes));
+        theme::muted(ui, &shape(facts, loaded.bytes));
 
         // Every finding, not only the first. The gate reports one violation
         // because it is refusing; Press is fixing, so it lists all of them --
         // being told about the audio and then, on the next attempt, about the
         // frame rate is the round trip this whole tool exists to remove.
-        for (finding, fix) in findings(facts, loaded.source_bytes, lang) {
+        for (finding, fix) in deterministic {
             ui.add_space(space::ROW);
             ui.horizontal_top(|ui| {
                 ui.label(egui::RichText::new("•").color(theme::NOTICE));
@@ -1256,21 +1783,14 @@ fn verdict_card(ui: &mut egui::Ui, lang: Lang, loaded: &Loaded, tall: f32, no_en
     });
 }
 
-fn findings(facts: &Facts, source_bytes: u64, lang: Lang) -> Vec<(String, String)> {
+/// The DETERMINISTIC findings: everything whose answer follows from the file.
+///
+/// Size is deliberately absent. It is the one gate rule that is not settled by
+/// looking at the header, and it belongs to Phase B along with the search that
+/// resolves it.
+fn findings(facts: &Facts, lang: Lang) -> Vec<(String, String)> {
     let mut out = Vec::new();
 
-    if source_bytes > limits::MAX_BYTES {
-        out.push((
-            text::FINDING_TOO_LARGE
-                .get(lang)
-                .replace("{size}", &source_bytes.div_ceil(1024 * 1024).to_string())
-                .replace(
-                    "{limit}",
-                    &limits::MAX_BYTES.div_ceil(1024 * 1024).to_string(),
-                ),
-            text::FIX_CODEC.get(lang).to_owned(),
-        ));
-    }
     if !limits::codec_allowed(facts.codec) {
         let named = if facts.raw_fourcc.is_empty() {
             "?"
@@ -1320,22 +1840,6 @@ fn findings(facts: &Facts, source_bytes: u64, lang: Lang) -> Vec<(String, String
     out
 }
 
-fn outcome_notes(produced: &Produced, lang: Lang) -> Vec<String> {
-    let mut notes = Vec::new();
-    match &produced.treatment {
-        Treatment::StreamCopy => notes.push(text::DONE_UNTOUCHED.get(lang).to_owned()),
-        Treatment::KeptOwnCodec { .. } => {
-            notes.push(text::DONE_UNTOUCHED.get(lang).to_owned());
-            notes.push(text::DONE_AV1_LOST.get(lang).to_owned());
-        }
-        Treatment::Av1 { .. } => {}
-    }
-    if produced.av1_cancelled {
-        notes.push(text::DONE_AV1_SKIPPED.get(lang).to_owned());
-    }
-    notes
-}
-
 fn shape(facts: &Facts, bytes: u64) -> String {
     format!(
         "{}  ·  {}×{}  ·  {:.0} fps  ·  {}  ·  {}",
@@ -1374,12 +1878,20 @@ fn reveal(path: &Path) {
     }
 }
 
-/// Not used by the window, but the one thing a verdict must never do is
-/// disagree with the gate. Kept honest here so the screen and the file agree.
+/// The inspect screen lists the deterministic problems; the gate reports the
+/// first problem of any kind. They must not contradict each other about the
+/// ones they both cover -- a file the gate refuses for its frame rate with
+/// nothing listed under it is a window disagreeing with the thing it exists to
+/// report.
+///
+/// Size is excluded on both sides, because it is exactly what the inspect screen
+/// declines to have an opinion about.
 #[allow(dead_code)]
-fn verdict_matches_findings(facts: &Facts, bytes: u64, lang: Lang) -> bool {
-    let refused = !gate::check(bytes, Some(facts)).passes();
-    refused == !findings(facts, bytes, lang).is_empty()
+fn verdict_matches_findings(facts: &Facts, lang: Lang) -> bool {
+    // Under the limit by construction, so `check` can only complain about the
+    // deterministic rules.
+    let refused = !gate::check(0, Some(facts)).passes();
+    refused == !findings(facts, lang).is_empty()
 }
 
 #[cfg(test)]
@@ -1410,10 +1922,10 @@ mod tests {
     /// is a window that contradicts the thing it exists to report.
     #[test]
     fn the_screen_and_the_gate_never_disagree_about_whether_it_passes() {
-        every_fixture(|facts, bytes, path| {
+        every_fixture(|facts, _bytes, path| {
             for lang in Lang::ALL {
                 assert!(
-                    verdict_matches_findings(facts, bytes, lang),
+                    verdict_matches_findings(facts, lang),
                     "{} disagrees with the gate in {}",
                     path.display(),
                     lang.endonym()
@@ -1426,9 +1938,9 @@ mod tests {
     /// name was changed on one side only.
     #[test]
     fn no_finding_renders_with_an_unfilled_placeholder() {
-        every_fixture(|facts, bytes, path| {
+        every_fixture(|facts, _bytes, path| {
             for lang in Lang::ALL {
-                for (finding, fix) in findings(facts, bytes, lang) {
+                for (finding, fix) in findings(facts, lang) {
                     for rendered in [&finding, &fix] {
                         assert!(
                             !rendered.contains('{') && !rendered.contains('}'),
@@ -1487,46 +1999,52 @@ mod tests {
         painted
     }
 
-    fn produced(path: &str) -> Outcome {
-        Outcome::Produced(Box::new(crate::standardise::Produced {
-            path: PathBuf::from(path),
-            bytes: 2_300_000,
-            facts: Facts {
-                width: 1920,
-                height: 1080,
-                fps: 30.0,
-                duration: 110.0,
-                codec: Some("av1"),
-                raw_fourcc: "av01".to_owned(),
-                has_audio: false,
-            },
-            treatment: Treatment::Av1 { crf: 32 },
-            audio_dropped: true,
-            scaled_to: Some((1920, 1080)),
-            frame_rate_clamped: Some(30),
-            trimmed_to: Some(90.0),
-            opening_cut: 0.0,
-            av1_cancelled: false,
-        }))
+    const LONG: &str = "D:\\User\\Videos\\Others\\少女舞乐哭Live-最终版-导出-4k-2026.mp4";
+
+    fn facts_of(codec: &'static str, w: u32, h: u32, fps: f64) -> Facts {
+        Facts {
+            width: w,
+            height: h,
+            fps,
+            duration: 110.6,
+            codec: Some(codec),
+            raw_fourcc: codec.to_owned(),
+            has_audio: false,
+        }
     }
 
-    /// Every stage, in every language, laid out on the one canvas there is.
+    fn a_bench(applied: Vec<Applied>, encoded: Option<Box<Encoded>>, said: Option<Said>) -> Bench {
+        Bench {
+            source: PathBuf::from(LONG),
+            source_bytes: 98_000_000,
+            source_facts: facts_of("h264", 3840, 2160, 120.0),
+            opening_cut: 1.5,
+            material: Box::new(Material::for_test(
+                PathBuf::from(LONG),
+                96_000_000,
+                facts_of("h264", 3840, 2160, 120.0),
+                applied,
+            )),
+            encoded,
+            said,
+            saved: None,
+            work: Arc::new(Workspace::open().expect("a workspace")),
+        }
+    }
+
+    /// Every screen, in every language, laid out on the one canvas there is.
     ///
     /// The debug assertion inside `region` is what does the judging; this only
-    /// has to put each stage on screen. A long CJK path is used deliberately --
-    /// it is both the widest text and the tallest when wrapped.
+    /// has to put each screen on the glass. A long CJK path is used
+    /// deliberately -- it is both the widest text and the tallest when wrapped.
     #[test]
     fn every_stage_fits_the_window() {
-        let long = "D:\\User\\Videos\\Others\\少女舞乐哭Live-最终版-导出-4k-2026.mp4";
-        let outcomes = [
-            Outcome::AlreadyStandard,
-            produced(long),
-            Outcome::Cancelled,
-            Outcome::StillTooLarge {
-                smallest: 91_000_000,
-            },
-            Outcome::Failed("the stream copy failed: ffmpeg exited with status 1".to_owned()),
-        ];
+        let sample = crate::ffmpeg::Progress {
+            out_time: 41.0,
+            fraction: Some(0.46),
+            bytes: 84_500_000,
+            speed: Some(1.8),
+        };
 
         for lang in Lang::ALL {
             let ctx = egui::Context::default();
@@ -1535,48 +2053,100 @@ mod tests {
             // Empty.
             run(&mut press, &ctx, 2);
 
-            // Working, both populations: one with a compliant copy behind it
-            // and one with nothing, which is the taller bar because the abandon
-            // button carries a sentence.
-            for fallback in [true, false] {
+            // Both phases running.
+            let phases = [
+                Phase::A(phase_a::Step::Copying(Some(sample))),
+                Phase::A(phase_a::Step::Verifying),
+                Phase::B(phase_b::Step::Encoding {
+                    crf: 26,
+                    attempt: 2,
+                    progress: Some(sample),
+                }),
+                Phase::B(phase_b::Step::Recalibrating { from: 32, to: 20 }),
+            ];
+            for phase in phases {
                 let (_tx, inbox) = channel();
                 press.stage = Stage::Working(Box::new(Working {
-                    path: PathBuf::from(long),
-                    source_bytes: 98_000_000,
+                    source: PathBuf::from(LONG),
+                    phase,
                     cancel: Cancel::new(),
                     inbox,
-                    step: Step::Encoding {
-                        crf: 32,
-                        attempt: 2,
-                        progress: Some(crate::ffmpeg::Progress {
-                            out_time: 41.0,
-                            fraction: Some(0.46),
-                            bytes: 84_500_000,
-                            speed: Some(1.8),
-                        }),
-                        fallback,
+                    work: Arc::new(Workspace::open().expect("a workspace")),
+                    held: Held {
+                        source_bytes: 98_000_000,
+                        source_facts: facts_of("h264", 3840, 2160, 120.0),
+                        trim: Trim::default(),
+                        material: None,
+                        encoded: None,
                     },
-                    fallback,
                 }));
                 run(&mut press, &ctx, 2);
             }
 
-            // Finished, every outcome.
-            for outcome in &outcomes {
-                press.stage = Stage::Finished(Box::new(Finished {
-                    source_bytes: 98_000_000,
-                    outcome: match outcome {
-                        Outcome::Produced(_) => produced(long),
-                        Outcome::AlreadyStandard => Outcome::AlreadyStandard,
-                        Outcome::Cancelled => Outcome::Cancelled,
-                        Outcome::StillTooLarge { smallest } => Outcome::StillTooLarge {
-                            smallest: *smallest,
+            // The bench, in every state it can be in: nothing done yet, a
+            // result in hand, and each way a run can end without one.
+            let benches = [
+                a_bench(vec![], None, None),
+                a_bench(
+                    vec![
+                        Applied::AudioDropped,
+                        Applied::TailCut {
+                            was: 110.6,
+                            now: 92.0,
                         },
-                        Outcome::Failed(reason) => Outcome::Failed(reason.clone()),
-                    },
-                }));
-                // Three frames: the centring measures itself and settles on the
-                // second, and the third is the one that has to be right.
+                    ],
+                    Some(Box::new(Encoded {
+                        path: PathBuf::from(LONG),
+                        bytes: 38_200_000,
+                        facts: facts_of("av1", 2560, 1440, 60.0),
+                        crf: 20,
+                        encodes: 2,
+                    })),
+                    None,
+                ),
+                // Ready AND already written: the fullest the action bar ever
+                // gets, which is the row that has to be measured.
+                Bench {
+                    saved: Some(PathBuf::from(LONG)),
+                    ..a_bench(
+                        vec![Applied::AudioDropped],
+                        Some(Box::new(Encoded {
+                            path: PathBuf::from(LONG),
+                            bytes: 38_200_000,
+                            facts: facts_of("av1", 2560, 1440, 60.0),
+                            crf: 20,
+                            encodes: 2,
+                        })),
+                        None,
+                    )
+                },
+                a_bench(
+                    vec![Applied::AudioDropped],
+                    None,
+                    Some(Said::MaterialWins {
+                        av1_was: Some(112_000_000),
+                    }),
+                ),
+                a_bench(
+                    vec![Applied::AudioDropped],
+                    None,
+                    Some(Said::StillTooLarge {
+                        smallest: 91_000_000,
+                    }),
+                ),
+                a_bench(vec![Applied::AudioDropped], None, Some(Said::Cancelled)),
+                a_bench(
+                    vec![Applied::AudioDropped],
+                    None,
+                    Some(Said::Failed(
+                        "the encode failed: ffmpeg exited with status 1".to_owned(),
+                    )),
+                ),
+            ];
+            for bench in benches {
+                press.stage = Stage::Bench(Box::new(bench));
+                // Three frames: the centred row measures itself and settles on
+                // the second, and the third is the one that has to be right.
                 let painted = run(&mut press, &ctx, 3);
 
                 let screen =

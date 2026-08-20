@@ -14,9 +14,14 @@ use euterpe_press::app::Press;
 use euterpe_press::gate::{self, Verdict};
 use euterpe_press::i18n::{Lang, text};
 use euterpe_press::plan::Trim;
-use euterpe_press::standardise::{self, Outcome, Step, Treatment};
+use euterpe_press::workspace::Workspace;
+use euterpe_press::{phase_a, phase_b};
 
 fn main() -> ExitCode {
+    // A Press that was killed mid-run leaves its workspace behind. Nothing will
+    // ever look at those files again, and they are megabytes each.
+    euterpe_press::workspace::sweep();
+
     let mut terminal = None;
     let mut files: Vec<PathBuf> = Vec::new();
     for arg in std::env::args_os().skip(1) {
@@ -152,98 +157,158 @@ fn repair(path: &Path) -> bool {
     // The window owns a real one and wires it to a button. Nothing cancels a
     // command-line run, so this token is never set.
     let cancel = euterpe_press::ffmpeg::Cancel::new();
+    let work = match Workspace::open() {
+        Ok(work) => work,
+        Err(error) => {
+            println!("{:<40} no temporary directory: {error}", name(path));
+            return true;
+        }
+    };
+
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            println!("{:<40} could not be read: {error}", name(path));
+            return true;
+        }
+    };
+    let Some(facts) = euterpe_press::gate::probe(&bytes) else {
+        println!("{:<40} not a readable MP4", name(path));
+        return true;
+    };
+    drop(bytes);
 
     let mut last = String::new();
-    let outcome =
-        standardise::standardise(&ffmpeg, path, &output, Trim::default(), &cancel, |step| {
-            let line = match step {
-                Step::Reading => "reading".to_owned(),
-                Step::Copying(p) => format!(
-                    "stream copy {} {}",
+    let mut say = |line: String| {
+        if line != last {
+            print!("\r{:<40} {line:<40}", name(path));
+            let _ = std::io::Write::flush(&mut std::io::stdout());
+            last = line;
+        }
+    };
+
+    // ── Phase A ──────────────────────────────────────────────────────────
+    let settled = phase_a::run(
+        &ffmpeg,
+        path,
+        &facts,
+        source_bytes,
+        Trim::default(),
+        &work,
+        &cancel,
+        |step| {
+            say(match step {
+                phase_a::Step::Reading => "reading".to_owned(),
+                phase_a::Step::Copying(p) => format!(
+                    "lossless pass {} {}",
                     percent(p.and_then(|p| p.fraction)),
                     written(p.map(|p| p.bytes)),
                 ),
-                Step::Encoding {
-                    crf,
-                    attempt,
-                    progress,
-                    ..
-                } => format!(
-                    "av1 crf {crf}{} {} {}",
-                    if attempt > 1 {
-                        format!(" (attempt {attempt})")
-                    } else {
-                        String::new()
-                    },
-                    percent(progress.and_then(|p| p.fraction)),
-                    written(progress.map(|p| p.bytes)),
-                ),
-                Step::Verifying => "verifying".to_owned(),
-            };
-            if line != last {
-                print!("\r{:<40} {line:<32}", name(path));
-                let _ = std::io::Write::flush(&mut std::io::stdout());
-                last = line;
-            }
-        });
+                phase_a::Step::Verifying => "verifying".to_owned(),
+            });
+        },
+    );
+    let material = match settled {
+        phase_a::Outcome::Settled(material) => material,
+        phase_a::Outcome::Cancelled => {
+            println!("\r{:<40} cancelled", name(path));
+            return true;
+        }
+        phase_a::Outcome::Failed(reason) => {
+            println!("\r{:<40} FAILED: {reason}", name(path));
+            return true;
+        }
+    };
 
-    print!("\r{:<40} ", name(path));
+    let mut did: Vec<String> = material
+        .applied
+        .iter()
+        .map(|applied| match applied {
+            phase_a::Applied::AudioDropped => "audio dropped".to_owned(),
+            phase_a::Applied::TailCut { now, .. } => format!("trimmed to {now:.0}s"),
+        })
+        .collect();
+
+    // ── Phase B ──────────────────────────────────────────────────────────
+    let Some(aim) = phase_b::aim(&material.facts, material.bytes, 0.0) else {
+        // Already conforming AV1: nothing to win and a generation to lose.
+        return deliver(path, material.path(), &output, source_bytes, &did);
+    };
+
+    let outcome = phase_b::run(&ffmpeg, &material, aim, 0.0, &work, &cancel, |step| {
+        say(match step {
+            phase_b::Step::Encoding {
+                crf,
+                attempt,
+                progress,
+            } => format!(
+                "av1 crf {crf}{} {} {}",
+                if attempt > 1 {
+                    format!(" (encode {attempt})")
+                } else {
+                    String::new()
+                },
+                percent(progress.and_then(|p| p.fraction)),
+                written(progress.map(|p| p.bytes)),
+            ),
+            phase_b::Step::Recalibrating { from, to } => format!("crf {from} -> {to}"),
+            phase_b::Step::Verifying => "verifying".to_owned(),
+        });
+    });
+
     match outcome {
-        Outcome::AlreadyStandard => {
-            println!("{:<32} already standard, nothing written", "");
-            false
+        phase_b::Outcome::Encoded(done) => {
+            did.insert(0, format!("av1 crf {}", done.crf));
+            if done.encodes > 1 {
+                did.push(format!("{} encodes", done.encodes));
+            }
+            deliver(path, &done.path, &output, source_bytes, &did)
         }
-        Outcome::Cancelled => {
-            println!("{:<32} cancelled, nothing written", "");
-            true
+        phase_b::Outcome::MaterialWins { av1_was } => {
+            if let Some(was) = av1_was {
+                did.push(format!("av1 came back at {} KB, kept the copy", was / 1024));
+            }
+            deliver(path, material.path(), &output, source_bytes, &did)
         }
-        Outcome::StillTooLarge { smallest } => {
+        phase_b::Outcome::StillTooLarge { smallest } => {
             println!(
-                "TOO LONG: smallest was {} MB, limit is {} MB",
+                "\r{:<40} TOO LONG: smallest was {} MB, limit is {} MB",
+                name(path),
                 smallest.div_ceil(1024 * 1024),
                 euterpe_press::gate::limits::MAX_BYTES.div_ceil(1024 * 1024),
             );
             true
         }
-        Outcome::Failed(reason) => {
-            println!("FAILED: {reason}");
+        phase_b::Outcome::Cancelled => {
+            println!("\r{:<40} cancelled", name(path));
             true
         }
-        Outcome::Produced(produced) => {
-            let mut did: Vec<String> = Vec::new();
-            match produced.treatment {
-                Treatment::StreamCopy => did.push("stream copy".to_owned()),
-                Treatment::Av1 { crf } => did.push(format!("av1 crf {crf}")),
-                Treatment::KeptOwnCodec { av1_ratio } => did.push(format!(
-                    "kept {}, av1 came back at {:.0}%",
-                    produced.facts.codec.unwrap_or("?"),
-                    av1_ratio * 100.0
-                )),
-            }
-            if produced.audio_dropped {
-                did.push("audio dropped".to_owned());
-            }
-            if let Some((w, h)) = produced.scaled_to {
-                did.push(format!("scaled to {w}x{h}"));
-            }
-            if let Some(fps) = produced.frame_rate_clamped {
-                did.push(format!("{fps} fps"));
-            }
-            if let Some(trim) = produced.trimmed_to {
-                did.push(format!("trimmed to {trim:.0}s"));
-            }
-            if produced.av1_cancelled {
-                did.push("av1 comparison cancelled".to_owned());
-            }
-            println!(
-                "{:>7} KB -> {:>4.0}%  {}",
-                source_bytes / 1024,
-                produced.ratio(source_bytes) * 100.0,
-                did.join(", ")
-            );
-            false
+        phase_b::Outcome::Failed(reason) => {
+            println!("\r{:<40} FAILED: {reason}", name(path));
+            true
         }
     }
+}
+
+/// Copy the winner out of the workspace, which is about to be deleted.
+fn deliver(source: &Path, from: &Path, to: &Path, source_bytes: u64, did: &[String]) -> bool {
+    if let Err(error) = std::fs::copy(from, to) {
+        println!("\r{:<40} FAILED: could not write: {error}", name(source));
+        return true;
+    }
+    let after = std::fs::metadata(to).map(|m| m.len()).unwrap_or(0);
+    println!(
+        "\r{:<40} {:>7} KB -> {:>4.0}%  {}",
+        name(source),
+        source_bytes / 1024,
+        if source_bytes > 0 {
+            after as f64 / source_bytes as f64 * 100.0
+        } else {
+            0.0
+        },
+        did.join(", ")
+    );
+    false
 }
 
 fn percent(fraction: Option<f64>) -> String {

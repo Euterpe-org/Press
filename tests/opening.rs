@@ -30,7 +30,8 @@ use euterpe_press::ffmpeg::{Cancel, Ffmpeg};
 use euterpe_press::gate;
 use euterpe_press::plan::Trim;
 use euterpe_press::preview::{Frame, Preview};
-use euterpe_press::standardise::{self, Outcome};
+use euterpe_press::workspace::Workspace;
+use euterpe_press::{phase_a, phase_b};
 
 /// The reduced size frames are compared at. Small enough that compression noise
 /// and grain are gone; large enough that two different moments of the same shot
@@ -108,6 +109,8 @@ fn much_closer_than(measured: f64, reference: f64) -> bool {
     measured < reference / 2.0
 }
 
+/// Both phases, end to end, and the result copied somewhere it will survive the
+/// workspace being dropped.
 fn produce(
     ffmpeg: &Ffmpeg,
     source: &std::path::Path,
@@ -116,10 +119,56 @@ fn produce(
 ) -> PathBuf {
     let _ = std::fs::remove_file(out);
     let cancel = Cancel::new();
-    match standardise::standardise(ffmpeg, source, out, trim, &cancel, |_| {}) {
-        Outcome::Produced(produced) => produced.path.clone(),
-        other => panic!("expected a file: {other:?}"),
-    }
+    let work = Workspace::open().expect("a workspace");
+
+    let bytes = std::fs::read(source).expect("read the source");
+    let facts = gate::probe(&bytes).expect("a readable source");
+    let source_bytes = bytes.len() as u64;
+    drop(bytes);
+
+    let settled = phase_a::run(
+        ffmpeg,
+        source,
+        &facts,
+        source_bytes,
+        trim,
+        &work,
+        &cancel,
+        |_| {},
+    );
+    let phase_a::Outcome::Settled(material) = settled else {
+        panic!("the lossless pass produced nothing: {settled:?}");
+    };
+
+    // The opening cut is Phase B's, because it needs `-ss` and `-ss` re-encodes.
+    let cut = trim.cut_opening;
+    let from = match phase_b::aim(&material.facts, material.bytes, cut) {
+        Some(aim) => match phase_b::run(ffmpeg, &material, aim, cut, &work, &cancel, |_| {}) {
+            phase_b::Outcome::Encoded(done) => done.path.clone(),
+            phase_b::Outcome::MaterialWins { .. } => material.path().to_path_buf(),
+            // The workspace listing comes with it: "it failed" without what was
+            // on disk sends whoever reads this hunting for the wrong thing.
+            other => {
+                let left: Vec<String> = std::fs::read_dir(work.dir())
+                    .into_iter()
+                    .flatten()
+                    .flatten()
+                    .map(|e| {
+                        format!(
+                            "{} ({} bytes)",
+                            e.file_name().to_string_lossy(),
+                            e.metadata().map(|m| m.len()).unwrap_or(0)
+                        )
+                    })
+                    .collect();
+                panic!("expected a file: {other:?}; workspace holds {left:?}");
+            }
+        },
+        None => material.path().to_path_buf(),
+    };
+
+    std::fs::copy(&from, out).expect("copy the result out of the workspace");
+    out.to_path_buf()
 }
 
 /// The comparison itself has to be able to tell two frames apart, or every
