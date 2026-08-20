@@ -1,0 +1,5 @@
+* text=auto eol=lf
+
+# The fixtures are compared byte for byte against what the server's own gate
+# reads out of them, so a line-ending rewrite would corrupt the test.
+tests/fixtures/** binary
