@@ -665,44 +665,258 @@ pub static BENCH_REMAINING: Text = Text {
     ru: "Нужен ещё один проход",
 };
 
-// The bench answers three questions in three bands, in this order: what just
-// happened, where things stand, what happens next. The labels are what make
-// that order legible instead of merely present -- the same information without
-// them was read as one undifferentiated block, and the answer to "what did my
-// press just do" was found last.
+// ── the bench, in four lines ─────────────────────────────────────────────
+//
+// A headline that says WHAT rather than merely THAT, one short line under it,
+// one line of what pressing the button will do, and the file's specification.
+//
+// The version this replaces labelled three bands -- "just done", the verdict,
+// "next" -- and it read as a ledger. "刚才做了 / 什么都不用做" is a label
+// contradicting its own content; "还需要再处理一次" is a headline that leaves
+// the reader asking what needs processing. Labels cannot rescue a headline that
+// does not say anything.
 
-pub static BAND_DID: Text = Text {
-    en: "Just done",
-    zh_hans: "刚才做了",
-    zh_hant: "剛才做了",
-    ja: "いま行ったこと",
-    ko: "방금 한 것",
-    de: "Gerade erledigt",
-    es: "Recién hecho",
-    fr: "Vient d'être fait",
-    hr: "Upravo učinjeno",
-    hu: "Az imént",
-    id: "Baru dilakukan",
-    nl: "Zojuist gedaan",
-    pt: "Acabou de ser feito",
-    ru: "Только что сделано",
+/// Joins items in a sentence, per language.
+///
+/// The interpunct that separates FIELDS -- `av1 · 1080×816 · 24 fps` -- is not
+/// what joins CLAUSES: "Processing will scale it to 2956×1246 · get it under
+/// 80 MB" is not a sentence anyone writes. Latin scripts take a comma, CJK
+/// takes its own enumeration mark.
+pub static LIST_SEP: Text = Text {
+    en: ", ",
+    zh_hans: "，",
+    zh_hant: "，",
+    ja: "、",
+    ko: ", ",
+    de: ", ",
+    es: ", ",
+    fr: ", ",
+    hr: ", ",
+    hu: ", ",
+    id: ", ",
+    nl: ", ",
+    pt: ", ",
+    ru: ", ",
 };
 
-pub static BAND_NEXT: Text = Text {
-    en: "Next",
-    zh_hans: "接下来会",
-    zh_hant: "接下來會",
-    ja: "このあと",
-    ko: "다음에",
-    de: "Als Nächstes",
-    es: "A continuación",
-    fr: "Ensuite",
-    hr: "Zatim",
-    hu: "Ezután",
-    id: "Berikutnya",
-    nl: "Hierna",
-    pt: "Em seguida",
-    ru: "Далее",
+/// The headline when the file cannot be uploaded yet. Paired with a short list
+/// of what is wrong, because "one more pass needed" is not an answer.
+pub static NOT_READY: Text = Text {
+    en: "Not ready yet",
+    zh_hans: "还不能上传",
+    zh_hant: "還不能上傳",
+    ja: "まだアップロードできません",
+    ko: "아직 업로드할 수 없습니다",
+    de: "Noch nicht bereit",
+    es: "Todavía no está listo",
+    fr: "Pas encore prêt",
+    hr: "Još nije spremno",
+    hu: "Még nem kész",
+    id: "Belum siap",
+    nl: "Nog niet klaar",
+    pt: "Ainda não está pronto",
+    ru: "Пока не готово",
+};
+
+/// The whole sentence, with `{steps}` where the list goes.
+///
+/// A template rather than a prefix, because `format!("{lead} {steps}")` puts a
+/// space between them and Chinese does not take one: "处理后会 压到 80 MB 以内".
+/// Each language decides its own join.
+pub static WILL_LEAD: Text = Text {
+    en: "Processing will {steps}",
+    zh_hans: "处理后会{steps}",
+    zh_hant: "處理後會{steps}",
+    ja: "処理すると{steps}",
+    ko: "처리하면 {steps}",
+    de: "Die Verarbeitung wird {steps}",
+    es: "El procesado va a {steps}",
+    fr: "Le traitement va {steps}",
+    hr: "Obrada će {steps}",
+    hu: "A feldolgozás: {steps}",
+    id: "Pemrosesan akan {steps}",
+    nl: "De bewerking gaat {steps}",
+    pt: "O processamento vai {steps}",
+    ru: "Обработка: {steps}",
+};
+
+// What is wrong, in as few words as carry the meaning. The numbers are on the
+// specification line directly below, so repeating them here -- "5120×2160,
+// over the pixel budget" above a line that says "5120×2160" -- is one fact
+// printed twice on one card.
+
+pub static SHORT_RESOLUTION: Text = Text {
+    en: "Resolution too high",
+    zh_hans: "分辨率太高",
+    zh_hant: "解析度太高",
+    ja: "解像度が高すぎます",
+    ko: "해상도가 너무 높음",
+    de: "Auflösung zu hoch",
+    es: "Resolución demasiado alta",
+    fr: "Résolution trop élevée",
+    hr: "Prevelika razlučivost",
+    hu: "Túl nagy felbontás",
+    id: "Resolusi terlalu tinggi",
+    nl: "Resolutie te hoog",
+    pt: "Resolução alta demais",
+    ru: "Слишком высокое разрешение",
+};
+
+pub static SHORT_FPS: Text = Text {
+    en: "Frame rate too high",
+    zh_hans: "帧率太高",
+    zh_hant: "影格率太高",
+    ja: "フレームレートが高すぎます",
+    ko: "프레임 레이트가 너무 높음",
+    de: "Bildrate zu hoch",
+    es: "Tasa de fotogramas demasiado alta",
+    fr: "Fréquence d'images trop élevée",
+    hr: "Previsoka brzina sličica",
+    hu: "Túl nagy képfrissítés",
+    id: "Laju bingkai terlalu tinggi",
+    nl: "Beeldsnelheid te hoog",
+    pt: "Taxa de quadros alta demais",
+    ru: "Слишком высокая частота кадров",
+};
+
+pub static SHORT_CODEC: Text = Text {
+    en: "Codec not accepted",
+    zh_hans: "编码不支持",
+    zh_hant: "編碼不支援",
+    ja: "対応していないコーデック",
+    ko: "지원하지 않는 코덱",
+    de: "Codec nicht zugelassen",
+    es: "Códec no admitido",
+    fr: "Codec non accepté",
+    hr: "Kodek nije prihvaćen",
+    hu: "Nem elfogadott kodek",
+    id: "Kodek tidak diterima",
+    nl: "Codec niet toegestaan",
+    pt: "Codec não aceito",
+    ru: "Кодек не принимается",
+};
+
+pub static SHORT_SIZE: Text = Text {
+    en: "File too large",
+    zh_hans: "文件太大",
+    zh_hant: "檔案太大",
+    ja: "ファイルが大きすぎます",
+    ko: "파일이 너무 큼",
+    de: "Datei zu groß",
+    es: "Archivo demasiado grande",
+    fr: "Fichier trop volumineux",
+    hr: "Datoteka prevelika",
+    hu: "Túl nagy fájl",
+    id: "Berkas terlalu besar",
+    nl: "Bestand te groot",
+    pt: "Arquivo grande demais",
+    ru: "Файл слишком большой",
+};
+
+pub static SHORT_OPENING: Text = Text {
+    en: "Opening to cut",
+    zh_hans: "开头要裁掉",
+    zh_hant: "開頭要裁掉",
+    ja: "冒頭のカットが必要",
+    ko: "앞부분을 잘라야 함",
+    de: "Anfang abzuschneiden",
+    es: "Hay que recortar el inicio",
+    fr: "Début à couper",
+    hr: "Početak treba odrezati",
+    hu: "Az elejét le kell vágni",
+    id: "Awalan perlu dipotong",
+    nl: "Begin moet eraf",
+    pt: "Início a cortar",
+    ru: "Начало нужно обрезать",
+};
+
+// What the next press will do. Bare verbs, because they are joined after
+// `WILL_LEAD` -- the `FIX_*` set carries its own "will" and reads as a
+// stammer once it has one in front of it.
+
+pub static WILL_SCALE: Text = Text {
+    en: "scale it to {width}×{height}",
+    zh_hans: "缩到 {width}×{height}",
+    zh_hant: "縮到 {width}×{height}",
+    ja: "{width}×{height} に縮小",
+    ko: "{width}×{height}로 축소",
+    de: "auf {width}×{height} skalieren",
+    es: "escalarlo a {width}×{height}",
+    fr: "le redimensionner en {width}×{height}",
+    hr: "smanjiti na {width}×{height}",
+    hu: "{width}×{height} méretre kicsinyíteni",
+    id: "memperkecil ke {width}×{height}",
+    nl: "schalen naar {width}×{height}",
+    pt: "redimensionar para {width}×{height}",
+    ru: "уменьшить до {width}×{height}",
+};
+
+pub static WILL_FPS: Text = Text {
+    en: "bring it down to {limit} fps",
+    zh_hans: "降到 {limit} fps",
+    zh_hant: "降到 {limit} fps",
+    ja: "{limit} fps に下げる",
+    ko: "{limit} fps로 낮춤",
+    de: "auf {limit} fps reduzieren",
+    es: "reducirlo a {limit} fps",
+    fr: "la ramener à {limit} fps",
+    hr: "smanjiti na {limit} fps",
+    hu: "{limit} fps-re csökkenteni",
+    id: "menurunkan ke {limit} fps",
+    nl: "terugbrengen naar {limit} fps",
+    pt: "reduzir para {limit} fps",
+    ru: "снизить до {limit} fps",
+};
+
+pub static WILL_CODEC: Text = Text {
+    en: "convert it to AV1",
+    zh_hans: "转成 AV1",
+    zh_hant: "轉成 AV1",
+    ja: "AV1 に変換",
+    ko: "AV1으로 변환",
+    de: "nach AV1 konvertieren",
+    es: "convertirlo a AV1",
+    fr: "la convertir en AV1",
+    hr: "pretvoriti u AV1",
+    hu: "AV1-re alakítani",
+    id: "mengubahnya ke AV1",
+    nl: "omzetten naar AV1",
+    pt: "convertê-lo para AV1",
+    ru: "преобразовать в AV1",
+};
+
+pub static WILL_SIZE: Text = Text {
+    en: "get it under {limit} MB",
+    zh_hans: "压到 {limit} MB 以内",
+    zh_hant: "壓到 {limit} MB 以內",
+    ja: "{limit} MB 以内に収める",
+    ko: "{limit} MB 이내로 줄임",
+    de: "unter {limit} MB bringen",
+    es: "dejarlo por debajo de {limit} MB",
+    fr: "la faire passer sous {limit} Mo",
+    hr: "spustiti ispod {limit} MB",
+    hu: "{limit} MB alá vinni",
+    id: "membuatnya di bawah {limit} MB",
+    nl: "onder {limit} MB brengen",
+    pt: "deixá-lo abaixo de {limit} MB",
+    ru: "уместить в {limit} МБ",
+};
+
+pub static WILL_OPENING: Text = Text {
+    en: "cut {shift} off the start",
+    zh_hans: "裁掉开头 {shift}",
+    zh_hant: "裁掉開頭 {shift}",
+    ja: "冒頭 {shift} をカット",
+    ko: "앞부분 {shift}을 자름",
+    de: "{shift} vom Anfang abschneiden",
+    es: "cortar {shift} del inicio",
+    fr: "couper {shift} au début",
+    hr: "odrezati {shift} s početka",
+    hu: "levágni az elejéről {shift}-t",
+    id: "memotong {shift} dari awal",
+    nl: "{shift} van het begin afhalen",
+    pt: "cortar {shift} do início",
+    ru: "срезать {shift} с начала",
 };
 
 /// The headline after an encode has just produced something.
@@ -798,21 +1012,23 @@ pub static DIFF_TAIL: Text = Text {
     ru: "Хвост обрезан: {was} → {now}",
 };
 
+/// Sits under "ready to upload" when the file arrived that way. Short, because
+/// it is good news and good news does not need a paragraph.
 pub static DIFF_NOTHING: Text = Text {
-    en: "Nothing needed doing — this is your own file",
-    zh_hans: "什么都不用做 —— 这就是你原来的文件",
-    zh_hant: "什麼都不用做 —— 這就是你原來的檔案",
-    ja: "何もする必要がありませんでした。元のファイルのままです",
-    ko: "할 일이 없었습니다 — 원본 파일 그대로입니다",
-    de: "Nichts zu tun — das ist deine eigene Datei",
-    es: "No hizo falta nada: este es tu propio archivo",
-    fr: "Rien à faire — c'est votre fichier d'origine",
-    hr: "Ništa nije trebalo — ovo je vaša izvorna datoteka",
-    hu: "Nem kellett semmit tenni — ez a te saját fájlod",
-    id: "Tidak ada yang perlu dilakukan — ini berkas Anda sendiri",
-    nl: "Er hoefde niets te gebeuren — dit is je eigen bestand",
-    pt: "Nada precisou ser feito — este é o seu próprio arquivo",
-    ru: "Ничего не потребовалось — это ваш исходный файл",
+    en: "It already met every rule",
+    zh_hans: "本来就符合要求",
+    zh_hant: "本來就符合要求",
+    ja: "もともと条件を満たしていました",
+    ko: "원래부터 조건을 만족했습니다",
+    de: "Sie erfüllte bereits alle Regeln",
+    es: "Ya cumplía todas las reglas",
+    fr: "Elle respectait déjà toutes les règles",
+    hr: "Već je zadovoljavala sva pravila",
+    hu: "Eleve megfelelt minden szabálynak",
+    id: "Sudah memenuhi semua aturan",
+    nl: "Het voldeed al aan alle regels",
+    pt: "Já cumpria todas as regras",
+    ru: "Оно уже отвечало всем требованиям",
 };
 
 pub static FIX_SIZE: Text = Text {
@@ -832,27 +1048,23 @@ pub static FIX_SIZE: Text = Text {
     ru: "будет сжато до {limit} МБ",
 };
 
+/// One line, with the number that decided it. The paragraph this replaces spent
+/// three clauses explaining a choice the reader can check at a glance.
 pub static SAID_MATERIAL_WINS: Text = Text {
-    en: "AV1 came back bigger, so the original picture was kept — it is both \
-         smaller and exact.",
-    zh_hans: "转成 AV1 反而更大，所以保留了原编码 —— 它既更小又是无损的。",
-    zh_hant: "轉成 AV1 反而更大，所以保留了原編碼 —— 它既更小又是無損的。",
-    ja: "AV1 のほうが大きくなったため、元の映像をそのまま使いました。小さく、しかも無劣化です。",
-    ko: "AV1이 오히려 더 커져서 원본 영상을 유지했습니다. 더 작고 무손실입니다.",
-    de: "AV1 kam größer zurück, also blieb das Originalbild — kleiner und exakt.",
-    es: "AV1 salió más grande, así que se conservó la imagen original: es más \
-         pequeña y exacta.",
-    fr: "L'AV1 est ressorti plus gros, l'image d'origine a donc été conservée : \
-         plus petite et exacte.",
-    hr: "AV1 je ispao veći, pa je zadržana izvorna slika — manja je i točna.",
-    hu: "Az AV1 nagyobb lett, ezért maradt az eredeti kép — kisebb és pontos.",
-    id: "AV1 malah lebih besar, jadi gambar aslinya dipertahankan — lebih kecil \
-         dan persis.",
-    nl: "AV1 kwam groter terug, dus is het originele beeld behouden — kleiner \
-         én exact.",
-    pt: "O AV1 ficou maior, então a imagem original foi mantida — é menor e exata.",
-    ru: "AV1 получился больше, поэтому осталось исходное изображение — оно \
-         меньше и точное.",
+    en: "AV1 came out at {size}, so the original was kept",
+    zh_hans: "转 AV1 反而有 {size}，所以保留了原编码",
+    zh_hant: "轉 AV1 反而有 {size}，所以保留了原編碼",
+    ja: "AV1 では {size} になったため、元のまま残しました",
+    ko: "AV1은 {size}가 되어 원본을 유지했습니다",
+    de: "AV1 kam auf {size}, also blieb das Original",
+    es: "AV1 salió con {size}, así que se conservó el original",
+    fr: "L'AV1 faisait {size}, l'original a donc été conservé",
+    hr: "AV1 je ispao {size}, pa je zadržan izvornik",
+    hu: "Az AV1 {size} lett, így maradt az eredeti",
+    id: "AV1 menjadi {size}, jadi aslinya dipertahankan",
+    nl: "AV1 werd {size}, dus is het origineel behouden",
+    pt: "O AV1 ficou com {size}, então o original foi mantido",
+    ru: "AV1 вышел на {size}, поэтому остался оригинал",
 };
 
 /// Shown while the search throws away one quality and starts another.
@@ -1144,8 +1356,19 @@ pub static EVERY_STRING: &[(&str, &Text)] = &[
     ("STEP_WRITTEN", &STEP_WRITTEN),
     ("PHASE_A_CLEAR", &PHASE_A_CLEAR),
     ("PHASE_A_CLEAR_HINT", &PHASE_A_CLEAR_HINT),
-    ("BAND_DID", &BAND_DID),
-    ("BAND_NEXT", &BAND_NEXT),
+    ("LIST_SEP", &LIST_SEP),
+    ("NOT_READY", &NOT_READY),
+    ("WILL_LEAD", &WILL_LEAD),
+    ("SHORT_RESOLUTION", &SHORT_RESOLUTION),
+    ("SHORT_FPS", &SHORT_FPS),
+    ("SHORT_CODEC", &SHORT_CODEC),
+    ("SHORT_SIZE", &SHORT_SIZE),
+    ("SHORT_OPENING", &SHORT_OPENING),
+    ("WILL_SCALE", &WILL_SCALE),
+    ("WILL_FPS", &WILL_FPS),
+    ("WILL_CODEC", &WILL_CODEC),
+    ("WILL_SIZE", &WILL_SIZE),
+    ("WILL_OPENING", &WILL_OPENING),
     ("BENCH_READY", &BENCH_READY),
     ("BENCH_COMPRESSED", &BENCH_COMPRESSED),
     ("BENCH_SMALLER", &BENCH_SMALLER),

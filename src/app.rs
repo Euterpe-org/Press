@@ -1274,32 +1274,22 @@ impl Press {
             theme::card(ui, |ui| {
                 ui.set_width(ui.available_width());
 
-                // THREE BANDS, THREE QUESTIONS, IN THE ORDER THEY ARE ASKED:
-                // what just happened, where things stand, what happens next.
+                // FOUR LINES, AND EVERY ONE OF THEM HAS TO EARN ITS PLACE.
                 //
-                // The information was all here before and it read as one block.
-                // The charter pressed a button, got "one more pass needed", and
-                // could not tell why -- the answer was the last line on the
-                // card, in grey, under a rule. Labelling the bands is what makes
-                // the order legible rather than merely present.
+                //   which file          a name, not a path -- the path is on the
+                //                       screen where the file is chosen
+                //   the headline        what, not merely that
+                //   one line under it   why, or what just happened
+                //   the specification   the facts, stated once each
                 //
-                // Gaps separate them, not rules: a label already IS a boundary,
-                // and a hairline above every label is furniture on top of
-                // structure.
-
-                // Which file this is about -- the charter's own, never the
-                // intermediate. Elided rather than wrapped: three lines of
-                // monospace above the headline buries the headline.
-                theme::spec(ui, &elide_middle(&bench.source.to_string_lossy(), 64));
-
-                // ── ① what just happened ──────────────────────────────
+                // What this replaces was a labelled ledger: "just done / nothing
+                // needed doing" directly above "compressed, 140.1 MB → 15.1 MB",
+                // a headline that said "one more pass needed" without saying of
+                // what, and the same number printed in two roundings three lines
+                // apart. Labels cannot rescue a headline that says nothing.
+                theme::muted(ui, &file_name(&bench.source));
                 ui.add_space(space::BLOCK);
-                theme::label(ui, text::BAND_DID.get(lang));
-                ui.add_space(space::TIGHT);
-                theme::line(ui, &changes_line(bench, lang), theme::INK);
 
-                // ── ② where things stand ──────────────────────────────
-                ui.add_space(space::BLOCK);
                 let (hero, colour) =
                     match (&bench.said, bench.encoded.is_some(), pending.is_empty()) {
                         (Some(Said::Failed(_)), ..) => (text::FAILED.get(lang), theme::ALARM),
@@ -1308,82 +1298,81 @@ impl Press {
                         }
                         (_, true, true) => (text::BENCH_COMPRESSED.get(lang), theme::GOOD),
                         (_, _, true) => (text::BENCH_READY.get(lang), theme::GOOD),
-                        (_, _, false) => (text::BENCH_REMAINING.get(lang), theme::NOTICE),
+                        (_, _, false) => (text::NOT_READY.get(lang), theme::NOTICE),
                     };
                 theme::heading(ui, hero, colour);
+                ui.add_space(space::TIGHT);
 
-                // The big before-and-after belongs to an ENCODE. The lossless
+                // ONE line under the headline, and which one depends entirely on
+                // what the headline just said.
+                match &bench.said {
+                    Some(Said::Failed(reason)) => theme::line(ui, reason, theme::INK),
+                    Some(Said::StillTooLarge { smallest }) => theme::line(
+                        ui,
+                        &text::STILL_TOO_LARGE_DETAIL
+                            .get(lang)
+                            .replace("{size}", &smallest.div_ceil(1024 * 1024).to_string())
+                            .replace(
+                                "{limit}",
+                                &limits::MAX_BYTES.div_ceil(1024 * 1024).to_string(),
+                            ),
+                        theme::INK,
+                    ),
+                    _ if !pending.is_empty() => {
+                        // What is wrong, in as few words as carry it. The
+                        // numbers are on the specification line below.
+                        theme::line(ui, &wrong_line(&pending, lang), theme::INK);
+                    }
+                    // AV1 was tried and lost. Press made that choice on the
+                    // charter's behalf, so it shows the number it decided on.
+                    Some(Said::MaterialWins { av1_was: Some(was) }) => theme::line(
+                        ui,
+                        &text::SAID_MATERIAL_WINS
+                            .get(lang)
+                            .replace("{size}", &megabytes(*was)),
+                        theme::INK,
+                    ),
+                    // Ready. The line answers "and what did my press do" --
+                    // where the numbers below have not already answered it.
+                    _ => {
+                        if let Some(did) = did_line(bench, lang) {
+                            theme::line(ui, &did, theme::INK);
+                        }
+                    }
+                }
+
+                // The number, only where an ENCODE produced it. The lossless
                 // pass changes the weight by whatever the audio track happened
-                // to be, and "378.6 MB → 375.4 MB, 1% smaller" in eighteen point
-                // dramatises a side effect as an achievement.
+                // to be, and dramatising that in eighteen point crowds out the
+                // line that matters.
                 if let Some(done) = &bench.encoded {
-                    ui.add_space(space::TIGHT);
+                    ui.add_space(space::ROW);
                     theme::tally(ui, &megabytes(bench.source_bytes), &megabytes(done.bytes));
-                    ui.add_space(space::TIGHT);
-
-                    // "87% smaller" is a number that was not on the previous
-                    // screen, which is half of why this reads as a different
-                    // screen rather than the same one again.
-                    let mut under = Vec::new();
                     if done.bytes < bench.source_bytes && bench.source_bytes > 0 {
                         let saved = 100.0 - done.bytes as f64 / bench.source_bytes as f64 * 100.0;
-                        under.push(
-                            text::BENCH_SMALLER
+                        ui.add_space(space::TIGHT);
+                        theme::muted(
+                            ui,
+                            &text::BENCH_SMALLER
                                 .get(lang)
                                 .replace("{percent}", &format!("{saved:.0}")),
                         );
                     }
-                    under.push(
-                        text::BENCH_ALLOWANCE
-                            .get(lang)
-                            .replace(
-                                "{percent}",
-                                &format!(
-                                    "{:.0}",
-                                    done.bytes as f64 / limits::MAX_BYTES as f64 * 100.0
-                                ),
-                            )
-                            .replace("{limit}", &megabytes(limits::MAX_BYTES)),
-                    );
-                    theme::muted(ui, &under.join(SEP));
-                }
-                ui.add_space(space::TIGHT);
-                theme::spec(ui, &spec_line(bench, facts, bytes));
-
-                // A run that already answered says so here, where the state is.
-                if let Some(said) = &bench.said {
-                    ui.add_space(space::TIGHT);
-                    said_line(ui, lang, said);
                 }
 
-                // ── ③ what happens next ───────────────────────────────
-                //
-                // Absent when nothing is pending, and its absence is the point:
-                // no third band means there is nothing left to do. Fix first,
-                // problem second -- under "Next" the action is the answer and
-                // the finding is the reason for it.
-                //
-                // Suppressed where a run has already said it cannot be done.
-                // "Next: compress to under 80 MB" beneath "too long to fit" is
-                // a promise the previous line just withdrew.
+                // What the next press will do -- one line, not a bulleted list
+                // that restates each problem underneath itself.
                 let stuck = matches!(
                     bench.said,
                     Some(Said::StillTooLarge { .. } | Said::Failed(_))
                 );
                 if !pending.is_empty() && !stuck {
-                    ui.add_space(space::BLOCK);
-                    theme::label(ui, text::BAND_NEXT.get(lang));
-                    for (what, fix) in pending_lines(&pending, lang) {
-                        ui.add_space(space::TIGHT);
-                        // The bullet is part of the sentence rather than a
-                        // column beside it. A `horizontal` row holding a marker
-                        // and a block of text puts the text in a layout that
-                        // resolves its wrap mode to EXTEND, and the long ones
-                        // then ran off the card.
-                        theme::line(ui, &format!("•  {fix}"), theme::INK);
-                        theme::muted(ui, &format!("    {what}"));
-                    }
+                    ui.add_space(space::ROW);
+                    theme::muted(ui, &will_line(&pending, lang));
                 }
+
+                ui.add_space(space::BLOCK);
+                theme::spec(ui, &spec_line(bench, facts, bytes));
 
                 if let Some(to) = &bench.saved {
                     ui.add_space(space::BLOCK);
@@ -1395,53 +1384,36 @@ impl Press {
         });
     }
 }
+/// Just the name. On the bench there is exactly one file in play, and the
+/// folder it came from is answered on the screen where it was chosen.
+fn file_name(path: &Path) -> String {
+    path.file_name()
+        .unwrap_or(path.as_os_str())
+        .to_string_lossy()
+        .into_owned()
+}
+
 /// One separator, everywhere. Three different spacings around the same dot is
 /// most of what "间距很随意" was pointing at.
 const SEP: &str = " · ";
 
-/// What was DONE to the file, in prose.
-fn changes_line(bench: &Bench, lang: Lang) -> String {
-    let changes = diff_lines(bench, lang);
-    if changes.is_empty() {
-        text::DIFF_NOTHING.get(lang).to_owned()
-    } else {
-        changes.join(SEP)
-    }
-}
-
-/// What the file IS, as data -- weight included, so the size is stated once in
-/// one rounding. It used to appear as `375.4 MB` in the tally and `376 MB` in a
-/// finding three lines apart, which is two answers to one question.
+/// EVERYTHING that happened to this file, both phases.
+/// What happened that the numbers do not already show.
 ///
-/// The codec appears ONCE too: the recipe said `AV1` and the shape said `av1`,
-/// in two cases, on the same line.
-fn spec_line(bench: &Bench, facts: &Facts, bytes: u64) -> String {
-    let mut parts = vec![megabytes(bytes), shape_only(facts)];
-    if let Some(done) = &bench.encoded {
-        parts.push(format!("CRF {}", done.crf));
-        if done.encodes > 1 {
-            parts.push(format!("×{}", done.encodes));
-        }
-    }
-    parts.join(SEP)
-}
-
-/// A path shortened from the MIDDLE, because the ends are what identify it --
-/// the drive it is on and the file it is.
-fn elide_middle(path: &str, most: usize) -> String {
-    let glyphs: Vec<char> = path.chars().collect();
-    if glyphs.len() <= most {
-        return path.to_owned();
-    }
-    let keep = most.saturating_sub(1) / 2;
-    let head: String = glyphs[..keep].iter().collect();
-    let tail: String = glyphs[glyphs.len() - keep..].iter().collect();
-    format!("{head}…{tail}")
-}
-
-/// What the lossless pass actually did, in the charter's language.
-fn diff_lines(bench: &Bench, lang: Lang) -> Vec<String> {
-    bench
+/// `None` when there is nothing to add. After an encode the TALLY is the answer
+/// to "what did my press do" -- 140.1 MB → 15.1 MB says it louder than any
+/// sentence can -- and the specification line below shows the shape it ended up
+/// in. So this covers only what neither of those can: a track removed, a tail
+/// cut.
+///
+/// Two bugs died here. It reported the lossless pass ALONE, which put "nothing
+/// needed doing -- this is your own file" directly above "compressed" and
+/// "140.1 MB -> 15.1 MB". The obvious repair -- also list the encode's work --
+/// was worse in English than in Chinese, because it borrowed the strings written
+/// for what WILL happen: "Audio removed - scale it to 2956x1246". The answer was
+/// that the encode does not need narrating at all.
+fn did_line(bench: &Bench, lang: Lang) -> Option<String> {
+    let did: Vec<String> = bench
         .material
         .applied
         .iter()
@@ -1452,94 +1424,82 @@ fn diff_lines(bench: &Bench, lang: Lang) -> Vec<String> {
                 .replace("{was}", &clock(*was))
                 .replace("{now}", &clock(*now)),
         })
-        .collect()
-}
+        .collect();
 
-/// What is still wrong, and what the next pass will do about it.
-fn pending_lines(pending: &[Pending], lang: Lang) -> Vec<(String, String)> {
+    if !did.is_empty() {
+        return Some(did.join(SEP));
+    }
+    // Nothing done AND nothing encoded: the file arrived correct, which is worth
+    // saying. Nothing done but something WAS encoded: the tally has already said
+    // everything, and "nothing needed doing" over a 90% saving is the sentence
+    // that started all this.
+    bench
+        .encoded
+        .is_none()
+        .then(|| text::DIFF_NOTHING.get(lang).to_owned())
+}
+/// What is wrong, in as few words as carry it.
+fn wrong_line(pending: &[Pending], lang: Lang) -> String {
     pending
         .iter()
         .map(|item| match item {
-            Pending::Scale { from, to } => (
-                text::FINDING_RESOLUTION
-                    .get(lang)
-                    .replace("{width}", &from.0.to_string())
-                    .replace("{height}", &from.1.to_string()),
-                text::FIX_RESOLUTION
-                    .get(lang)
-                    .replace("{width}", &to.0.to_string())
-                    .replace("{height}", &to.1.to_string()),
-            ),
-            Pending::FrameRate { from, to } => (
-                text::FINDING_FPS
-                    .get(lang)
-                    .replace("{fps}", &from.to_string())
-                    .replace("{limit}", &to.to_string()),
-                text::FIX_FPS.get(lang).replace("{limit}", &to.to_string()),
-            ),
-            Pending::Codec { from } => (
-                text::FINDING_CODEC.get(lang).replace("{codec}", from),
-                text::FIX_CODEC.get(lang).to_owned(),
-            ),
-            Pending::OpeningCut { seconds } => (
-                text::TRIM_HEAD_WARNING
-                    .get(lang)
-                    .replace("{shift}", &clock(*seconds)),
-                text::TRIM_HEAD_COSTS_REENCODE.get(lang).to_owned(),
-            ),
-            Pending::TooLarge { now, limit } => (
-                text::FINDING_TOO_LARGE
-                    .get(lang)
-                    .replace("{size}", &now.div_ceil(1024 * 1024).to_string())
-                    .replace("{limit}", &limit.div_ceil(1024 * 1024).to_string()),
-                text::FIX_SIZE
-                    .get(lang)
-                    .replace("{limit}", &limit.div_ceil(1024 * 1024).to_string()),
-            ),
+            Pending::Scale { .. } => text::SHORT_RESOLUTION.get(lang),
+            Pending::FrameRate { .. } => text::SHORT_FPS.get(lang),
+            Pending::Codec { .. } => text::SHORT_CODEC.get(lang),
+            Pending::OpeningCut { .. } => text::SHORT_OPENING.get(lang),
+            Pending::TooLarge { .. } => text::SHORT_SIZE.get(lang),
         })
-        .collect()
+        .collect::<Vec<_>>()
+        .join(text::LIST_SEP.get(lang))
 }
 
-/// What the last Phase B run concluded. Amber for "nothing went wrong but you
-/// should know"; red only for a genuine failure.
-fn said_line(ui: &mut egui::Ui, lang: Lang, said: &Said) {
-    match said {
-        Said::MaterialWins { av1_was } => {
-            ui.add(egui::Label::new(
-                egui::RichText::new(text::SAID_MATERIAL_WINS.get(lang))
-                    .size(theme::size::SMALL)
-                    .color(theme::INK_MUTED),
-            ));
-            // The number it lost by. Press made a choice on the charter's
-            // behalf; the least it can do is show its working.
-            if let Some(was) = av1_was {
-                theme::muted(ui, &format!("AV1{SEP}{}", megabytes(*was)));
+/// What the next press will do, in one sentence.
+fn will_line(pending: &[Pending], lang: Lang) -> String {
+    let steps: Vec<String> = pending
+        .iter()
+        .map(|item| match item {
+            Pending::Scale { to, .. } => text::WILL_SCALE
+                .get(lang)
+                .replace("{width}", &to.0.to_string())
+                .replace("{height}", &to.1.to_string()),
+            Pending::FrameRate { to, .. } => {
+                text::WILL_FPS.get(lang).replace("{limit}", &to.to_string())
             }
-        }
-        // The heading is NOT repeated here: the band above already carries it
-        // as the card's hero, and saying it twice on one card is how the old
-        // screen ended up looking like two screens stacked.
-        Said::StillTooLarge { smallest } => {
-            ui.add(egui::Label::new(
-                egui::RichText::new(
-                    text::STILL_TOO_LARGE_DETAIL
-                        .get(lang)
-                        .replace("{size}", &smallest.div_ceil(1024 * 1024).to_string())
-                        .replace(
-                            "{limit}",
-                            &limits::MAX_BYTES.div_ceil(1024 * 1024).to_string(),
-                        ),
-                )
-                .size(theme::size::SMALL),
-            ));
-        }
-        Said::Cancelled => theme::muted(ui, text::CANCELLED.get(lang)),
-        Said::Failed(reason) => {
-            ui.add(egui::Label::new(
-                egui::RichText::new(reason).size(theme::size::SMALL),
-            ));
-        }
+            Pending::Codec { .. } => text::WILL_CODEC.get(lang).to_owned(),
+            Pending::OpeningCut { seconds } => text::WILL_OPENING
+                .get(lang)
+                .replace("{shift}", &clock(*seconds)),
+            Pending::TooLarge { limit, .. } => text::WILL_SIZE
+                .get(lang)
+                .replace("{limit}", &limit.div_ceil(1024 * 1024).to_string()),
+        })
+        .collect();
+    text::WILL_LEAD
+        .get(lang)
+        .replace("{steps}", &steps.join(text::LIST_SEP.get(lang)))
+}
+
+/// What the file IS, as data -- weight included, so the size is stated once in
+/// one rounding. It used to appear as `375.4 MB` in the tally and `376 MB` in a
+/// finding three lines apart, which is two answers to one question.
+///
+/// The codec appears ONCE too: the recipe said `AV1` and the shape said `av1`,
+/// in two cases, on the same line.
+fn spec_line(bench: &Bench, facts: &Facts, bytes: u64) -> String {
+    // The weight is here ONLY when nothing above has already stated it. With a
+    // tally on screen it appears twice on one card, three lines apart.
+    let mut parts = if bench.encoded.is_some() {
+        vec![shape_only(facts)]
+    } else {
+        vec![megabytes(bytes), shape_only(facts)]
+    };
+    if let Some(done) = &bench.encoded {
+        // The CRF, because it is the one parameter that explains the result
+        // and there is no knob for it. NOT the attempt count: "×2" is internal
+        // bookkeeping wearing a symbol nobody can decode.
+        parts.push(format!("CRF {}", done.crf));
     }
+    parts.join(SEP)
 }
 
 /// How wide a centred block is allowed to be.
@@ -2316,6 +2276,200 @@ mod tests {
                     "{}: painted {painted:?} outside a window of {screen:?}",
                     lang.endonym()
                 );
+            }
+        }
+    }
+
+    /// The whole card, as one list of rendered lines.
+    fn card_lines(bench: &Bench, lang: Lang) -> Vec<String> {
+        let pending = bench.pending();
+        let (_, bytes, facts) = bench.have();
+        let mut lines = vec![file_name(&bench.source)];
+
+        lines.push(
+            match (&bench.said, bench.encoded.is_some(), pending.is_empty()) {
+                (Some(Said::Failed(_)), ..) => text::FAILED.get(lang),
+                (Some(Said::StillTooLarge { .. }), ..) => text::STILL_TOO_LARGE.get(lang),
+                (_, true, true) => text::BENCH_COMPRESSED.get(lang),
+                (_, _, true) => text::BENCH_READY.get(lang),
+                (_, _, false) => text::NOT_READY.get(lang),
+            }
+            .to_owned(),
+        );
+
+        if !pending.is_empty() {
+            lines.push(wrong_line(&pending, lang));
+        } else if let Some(did) = did_line(bench, lang) {
+            lines.push(did);
+        }
+        if let Some(done) = &bench.encoded {
+            lines.push(format!(
+                "{} → {}",
+                megabytes(bench.source_bytes),
+                megabytes(done.bytes)
+            ));
+            if done.bytes < bench.source_bytes {
+                let saved = 100.0 - done.bytes as f64 / bench.source_bytes as f64 * 100.0;
+                lines.push(
+                    text::BENCH_SMALLER
+                        .get(lang)
+                        .replace("{percent}", &format!("{saved:.0}")),
+                );
+            }
+        }
+        if !pending.is_empty() {
+            lines.push(will_line(&pending, lang));
+        }
+        lines.push(spec_line(bench, facts, bytes));
+        lines
+    }
+
+    /// Every weight stated on a card, as it is written.
+    fn weights(lines: &[String]) -> Vec<String> {
+        let mut found = Vec::new();
+        for line in lines {
+            let glyphs: Vec<char> = line.chars().collect();
+            for (i, _) in line.match_indices(" MB") {
+                let upto: Vec<char> = line[..i].chars().collect();
+                let start = upto
+                    .iter()
+                    .rposition(|c| !(c.is_ascii_digit() || *c == '.'))
+                    .map_or(0, |p| p + 1);
+                let number: String = upto[start..].iter().collect();
+                if !number.is_empty() {
+                    found.push(number);
+                }
+            }
+            let _ = glyphs;
+        }
+        found
+    }
+
+    /// The shapes a charter actually meets, in the two languages this project
+    /// is read in most.
+    fn every_shape() -> Vec<(&'static str, Bench)> {
+        let big = || facts_of("h264", 5120, 2160, 60.0);
+        let small = || facts_of("h264", 1080, 816, 24.0);
+        let done = || facts_of("av1", 2956, 1246, 60.0);
+
+        let shape = |source: Facts,
+                     source_bytes: u64,
+                     applied: Vec<Applied>,
+                     material_bytes: u64,
+                     encoded: Option<Box<Encoded>>| {
+            let facts = source.clone();
+            Bench {
+                source: PathBuf::from(LONG),
+                source_bytes,
+                source_facts: source,
+                opening_cut: 0.0,
+                material: Box::new(Material::for_test(
+                    PathBuf::from(LONG),
+                    material_bytes,
+                    facts,
+                    applied,
+                )),
+                encoded,
+                said: None,
+                saved: None,
+                work: Arc::new(Workspace::open().expect("a workspace")),
+            }
+        };
+
+        vec![
+            (
+                "audio removed, then compressed",
+                shape(
+                    small(),
+                    98_500_000,
+                    vec![Applied::AudioDropped],
+                    94_000_000,
+                    Some(Box::new(Encoded {
+                        path: PathBuf::from(LONG),
+                        bytes: 38_800_000,
+                        facts: facts_of("av1", 1080, 816, 24.0),
+                        crf: 20,
+                        encodes: 2,
+                    })),
+                ),
+            ),
+            (
+                "arrived correct",
+                shape(
+                    facts_of("av1", 1080, 816, 24.0),
+                    38_800_000,
+                    vec![],
+                    38_800_000,
+                    None,
+                ),
+            ),
+            (
+                "audio removed, still too big",
+                shape(
+                    small(),
+                    98_500_000,
+                    vec![Applied::AudioDropped],
+                    94_000_000,
+                    None,
+                ),
+            ),
+            (
+                "two problems, nothing done yet",
+                shape(big(), 146_900_000, vec![], 146_900_000, None),
+            ),
+            (
+                "two problems, then compressed",
+                shape(
+                    big(),
+                    146_900_000,
+                    vec![],
+                    146_900_000,
+                    Some(Box::new(Encoded {
+                        path: PathBuf::from(LONG),
+                        bytes: 15_800_000,
+                        facts: done(),
+                        crf: 20,
+                        encodes: 2,
+                    })),
+                ),
+            ),
+        ]
+    }
+
+    /// No weight is printed twice on one card.
+    ///
+    /// This defect has come back three times in three different disguises --
+    /// `37.0 MB` in the tally and again in the specification; `375.4 MB` beside
+    /// `376 MB`, the same number in two roundings; `140.1 MB` and `141 MB`. Each
+    /// time it read as carelessness, because it is.
+    ///
+    /// Run with `--nocapture` to READ the copy rather than reason about it,
+    /// which is how the last round of wording bugs were found.
+    #[test]
+    fn no_weight_is_stated_twice_on_one_card() {
+        for lang in Lang::ALL {
+            for (name, bench) in every_shape() {
+                let lines = card_lines(&bench, lang);
+                println!("\n### {name} [{}]", lang.endonym());
+                for line in &lines {
+                    println!("  {line}");
+                    assert!(!line.trim().is_empty(), "{name}: an empty line");
+                    assert!(
+                        !line.contains('{') && !line.contains('}'),
+                        "{name}: unfilled placeholder in {line:?}"
+                    );
+                }
+
+                let mut seen: Vec<String> = Vec::new();
+                for weight in weights(&lines) {
+                    assert!(
+                        !seen.contains(&weight),
+                        "{name} [{}]: {weight} MB is stated twice:\n{}",
+                        lang.endonym(),
+                        lines.join("\n")
+                    );
+                    seen.push(weight);
+                }
             }
         }
     }
