@@ -86,10 +86,14 @@ pub fn judge(path: &Path, expect: &Expect) -> Result<Checked, Broken> {
         ));
     }
 
-    if facts.picture() != expect.size {
+    // The PICTURE on both sides of the comparison and on both sides of the
+    // message. Reporting the coded size while testing the displayed one would
+    // print a pair that matches the expectation it just failed.
+    let picture = facts.picture();
+    if picture != expect.size {
         return broken(format!(
             "the result is {}x{}, expected {}x{}",
-            facts.width, facts.height, expect.size.0, expect.size.1
+            picture.0, picture.1, expect.size.0, expect.size.1
         ));
     }
 

@@ -22,6 +22,7 @@
 //! reason: a temp file nobody will ever look at again is still the user's disk.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Directories older than this are from a run that will never finish.
@@ -32,7 +33,17 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// longer than any single encode and far shorter than "forever".
 const STALE_AFTER: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
 
-fn root() -> PathBuf {
+/// Press's own corner of the temp directory.
+///
+/// ONE definition, because two things live here and both sweep it: the
+/// workspaces below, named `work-*`, and the unpacked encoder, named
+/// `ffmpeg-*.exe`. Each sweep leaves the other's files alone by prefix, which
+/// only works while they agree on the directory -- and they agreed by having
+/// the same expression written out twice.
+///
+/// Named, not hidden: a person looking at what this program put on their disk
+/// should be able to tell what it is and where it came from.
+pub fn root() -> PathBuf {
     std::env::temp_dir().join("Euterpe.Press")
 }
 
@@ -46,14 +57,25 @@ impl Workspace {
     /// Make a fresh one. Fails only if the temp directory itself is unusable,
     /// which is not a condition Press can work around.
     pub fn open() -> std::io::Result<Self> {
-        // No random number generator is linked, and none is needed: the pair
-        // (process, instant) is unique across every Press that could be running,
-        // and the counter separates workspaces within one process.
+        // No random number generator is linked and none is needed. The process
+        // id separates every Press that could be running; the COUNTER separates
+        // workspaces within one of them.
+        //
+        // The counter is what makes that a guarantee rather than a likelihood.
+        // Uniqueness used to rest on a nanosecond clock reading, which is fine
+        // until it is not: `duration_since(UNIX_EPOCH)` fails on a machine whose
+        // clock sits before 1970 -- a dead CMOS battery is enough -- and the
+        // fallback handed every workspace the same stamp. `create_dir_all`
+        // accepts an existing directory without complaint, so two live
+        // workspaces would have quietly shared one, and the first to be dropped
+        // would have deleted the other's files mid-encode.
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let n = NEXT.fetch_add(1, Ordering::Relaxed);
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let dir = root().join(format!("work-{:x}-{stamp:x}", std::process::id()));
+        let dir = root().join(format!("work-{:x}-{stamp:x}-{n:x}", std::process::id()));
         std::fs::create_dir_all(&dir)?;
         Ok(Self { dir })
     }
@@ -134,5 +156,20 @@ mod tests {
         std::fs::write(a.file("x"), b"a").expect("write a");
         drop(b);
         assert!(a.file("x").exists(), "dropping b removed a's file");
+    }
+
+    /// The counter, not the clock. A hundred opened in one burst -- which on a
+    /// coarse clock, or a clock the epoch conversion fails on, would all have
+    /// carried the same stamp.
+    #[test]
+    fn a_burst_of_workspaces_never_shares_a_directory() {
+        let all: Vec<Workspace> = (0..100)
+            .map(|_| Workspace::open().expect("a workspace"))
+            .collect();
+        let mut dirs: Vec<&Path> = all.iter().map(Workspace::dir).collect();
+        dirs.sort_unstable();
+        let total = dirs.len();
+        dirs.dedup();
+        assert_eq!(dirs.len(), total, "two workspaces shared a directory");
     }
 }

@@ -34,12 +34,35 @@
 //!   nothing else to look at, and pinning a progress bar to the top leaves the
 //!   window mostly void.
 //! * Four gaps exist (`theme::space`) and each means something.
+//!
+//! # What lives beside this file
+//!
+//! Two things were pulled out, and both for the same reason: they are the parts
+//! that can be judged WITHOUT running a window, and they were the parts hardest
+//! to look at while they were mixed in with the painting.
+//!
+//! * [`say`] -- every sentence a screen prints. Pure: a bench and a language in,
+//!   the exact string out. This is where every wording bug this project has had
+//!   actually lived, and where the test that reads them had grown a hand-copy of
+//!   the logic because it could not reach the real thing without a `Ui`.
+//! * [`layout`] -- cutting regions out of a canvas whose size is known in
+//!   advance, and asserting that what a screen laid out fits the space it was
+//!   handed.
+//!
+//! What is left here is the STATE MACHINE -- the stages, the transitions between
+//! them, and the four screens that draw them.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
 use eframe::egui;
+
+mod layout;
+mod say;
+
+use layout::*;
+use say::*;
 
 use crate::ffmpeg::{Cancel, Ffmpeg};
 use crate::gate::{self, Facts, limits};
@@ -460,47 +483,6 @@ impl eframe::App for Press {
             region(ui, "the action bar", bar, |ui| self.action(ui));
         }
     }
-}
-
-fn slice_top(rect: egui::Rect, height: f32) -> egui::Rect {
-    egui::Rect::from_min_max(rect.min, egui::pos2(rect.right(), rect.top() + height))
-}
-
-fn slice_bottom(rect: egui::Rect, height: f32) -> egui::Rect {
-    egui::Rect::from_min_max(egui::pos2(rect.left(), rect.bottom() - height), rect.max)
-}
-
-fn hairline(ui: &egui::Ui, x: egui::Rangef, y: f32) {
-    ui.painter()
-        .hline(x, y, egui::Stroke::new(1.0, theme::HAIRLINE));
-}
-
-/// Draws into exactly `rect` and nowhere else.
-///
-/// The clip makes overflow impossible to SEE, which is only half of what is
-/// wanted: content that does not fit is then silently cut instead of spilling,
-/// and a cut sentence is a worse bug than a visible one because nobody notices
-/// it. So a debug build also asserts that what was laid out actually fitted --
-/// every test run is a check that the fixed canvas is big enough for what is on
-/// it, in every language.
-fn region(ui: &mut egui::Ui, name: &str, rect: egui::Rect, add: impl FnOnce(&mut egui::Ui)) {
-    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
-    child.set_clip_rect(rect);
-    add(&mut child);
-
-    // Named, because "a region overflowed" is a fact nobody can act on. There
-    // are eight of them and they nest, so the first question on reading the
-    // failure is always which one -- and answering it by bisecting the test is
-    // several minutes that this string costs nothing to save.
-    let used = child.min_rect();
-    debug_assert!(
-        used.height() <= rect.height() + 1.0 && used.width() <= rect.width() + 1.0,
-        "{name} laid out {:.0}x{:.0} into {:.0}x{:.0} and the excess was clipped away",
-        used.width(),
-        used.height(),
-        rect.width(),
-        rect.height(),
-    );
 }
 
 impl Press {
@@ -1208,27 +1190,6 @@ fn drop_zone(
     None
 }
 
-/// A sentence painted centred and wrapped, for the one place with no widget to
-/// hang it off -- the drop zone is a single painted rectangle by design.
-fn wrapped_centre(
-    ui: &egui::Ui,
-    centre: egui::Pos2,
-    body: &str,
-    colour: egui::Color32,
-    width: f32,
-) {
-    let mut job = egui::text::LayoutJob::simple(
-        body.to_owned(),
-        egui::FontId::proportional(theme::size::BODY),
-        colour,
-        width,
-    );
-    job.halign = egui::Align::Center;
-    let galley = ui.painter().layout_job(job);
-    let top = centre - egui::vec2(0.0, galley.size().y / 2.0);
-    ui.painter().galley(top, galley, colour);
-}
-
 impl Press {
     fn inspect(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let lang = self.lang;
@@ -1450,414 +1411,6 @@ impl Press {
                 }
             });
         });
-    }
-}
-/// The headline, and the colour that carries its tone.
-///
-/// SEPARATE FROM THE PAINTING, so the test that reads every card in every
-/// language reads the real decision instead of a hand-copy of it. It was a
-/// hand-copy, and it had already drifted: the copy said "compressed" for every
-/// encode while the card had learnt to say "done" for one that grew -- so the
-/// test written to catch exactly that class of wording bug was blind to the two
-/// branches added for it.
-fn headline(
-    bench: &Bench,
-    blocked: bool,
-    requested: bool,
-    lang: Lang,
-) -> (&'static str, egui::Color32) {
-    match (&bench.said, bench.encoded.is_some(), blocked) {
-        (Some(Said::Failed(_)), ..) => (text::FAILED.get(lang), theme::ALARM),
-        (Some(Said::StillTooLarge { .. }), ..) => (text::STILL_TOO_LARGE.get(lang), theme::NOTICE),
-        // The file is fine; it is the crop that did not happen. Amber, not
-        // green -- the charter asked for something and did not get it -- and
-        // never "ready", which would be true and beside the point.
-        (Some(Said::RequestDropped), ..) => (text::REQUEST_DROPPED.get(lang), theme::NOTICE),
-        // Stopped by hand. Said plainly, because the alternative was the screen
-        // the charter pressed Stop on, unchanged -- which reads as a Stop that
-        // did not work.
-        (Some(Said::Cancelled), ..) => (text::CANCELLED.get(lang), theme::INK),
-        // "Compressed" is claimed only where it is true. A crop has to be
-        // re-encoded, and a re-encode of an already-efficient file can come back
-        // larger -- a fair outcome, and not one to put a congratulation on.
-        (_, true, false) => (
-            if bench
-                .encoded
-                .as_ref()
-                .is_some_and(|d| d.bytes < bench.job.bytes)
-            {
-                text::BENCH_COMPRESSED.get(lang)
-            } else {
-                text::BENCH_APPLIED.get(lang)
-            },
-            theme::GOOD,
-        ),
-        // Neither good news nor bad, so neither green nor amber: a plain
-        // statement that there is a press outstanding.
-        (_, false, false) if requested => (text::BENCH_WAITING.get(lang), theme::INK),
-        (_, _, false) => (text::BENCH_READY.get(lang), theme::GOOD),
-        (_, _, true) => (text::NOT_READY.get(lang), theme::NOTICE),
-    }
-}
-
-/// ONE line under the headline, and which one depends entirely on what the
-/// headline just said.
-fn under_headline(bench: &Bench, pending: &[Pending], blocked: bool, lang: Lang) -> Option<String> {
-    match &bench.said {
-        Some(Said::Failed(reason)) => Some(reason.clone()),
-        Some(Said::StillTooLarge { smallest }) => Some(
-            text::STILL_TOO_LARGE_DETAIL
-                .get(lang)
-                .replace("{size}", &smallest.div_ceil(1024 * 1024).to_string())
-                .replace(
-                    "{limit}",
-                    &limits::MAX_BYTES.div_ceil(1024 * 1024).to_string(),
-                ),
-        ),
-        // Why the request was dropped, since the headline only says that it was.
-        Some(Said::RequestDropped) => Some(text::REQUEST_DROPPED_DETAIL.get(lang).to_owned()),
-        // AV1 was tried and lost. Press made that choice on the charter's
-        // behalf, so it says what the choice was -- with the number where there
-        // is one, and without inventing one where the encode was killed on its
-        // way past the material's weight rather than allowed to finish. Saying
-        // nothing at all left a minutes-long run looking like a no-op.
-        Some(Said::MaterialWins { av1_was }) => Some(match av1_was {
-            Some(was) => text::SAID_MATERIAL_WINS
-                .get(lang)
-                .replace("{size}", &megabytes(*was)),
-            None => text::SAID_MATERIAL_WINS_UNMEASURED.get(lang).to_owned(),
-        }),
-        // The only thing worth saying about a stop is whether it cost anything.
-        Some(Said::Cancelled) => Some(text::CANCELLED_DETAIL.get(lang).to_owned()),
-        // What is wrong, in as few words as carry it. The numbers are on the
-        // specification line below.
-        _ if blocked => Some(wrong_line(pending, lang)),
-        // Ready. The line answers "and what did my press do" -- where the
-        // numbers below have not already answered it.
-        _ => did_line(bench, lang),
-    }
-}
-
-/// Just the name. On the bench there is exactly one file in play, and the
-/// folder it came from is answered on the screen where it was chosen.
-fn file_name(path: &Path) -> String {
-    path.file_name()
-        .unwrap_or(path.as_os_str())
-        .to_string_lossy()
-        .into_owned()
-}
-
-/// One separator, everywhere. Three different spacings around the same dot is
-/// most of what "间距很随意" was pointing at.
-const SEP: &str = " · ";
-
-/// How the weight moved, in whichever direction it moved.
-///
-/// `None` only when it did not move at all. Stating the growth is not
-/// self-flagellation: the two numbers are directly above it, so the charter
-/// works it out either way, and a window that reports only its wins is a window
-/// nobody believes about anything.
-fn delta_line(bench: &Bench, lang: Lang) -> Option<String> {
-    let done = bench.encoded.as_ref()?;
-    if bench.job.bytes == 0 || done.bytes == bench.job.bytes {
-        return None;
-    }
-    let ratio = done.bytes as f64 / bench.job.bytes as f64;
-    let (template, percent) = if done.bytes < bench.job.bytes {
-        (&text::BENCH_SMALLER, (1.0 - ratio) * 100.0)
-    } else {
-        (&text::BENCH_BIGGER, (ratio - 1.0) * 100.0)
-    };
-    Some(
-        template
-            .get(lang)
-            .replace("{percent}", &format!("{percent:.0}")),
-    )
-}
-
-/// How much has been written, when anything has.
-fn written_line(lang: Lang, bytes: Option<u64>) -> Vec<String> {
-    bytes
-        .map(|bytes| {
-            text::STEP_WRITTEN
-                .get(lang)
-                .replace("{size}", &megabytes(bytes))
-                .replace("{limit}", &megabytes(limits::MAX_BYTES))
-        })
-        .into_iter()
-        .collect()
-}
-
-/// EVERYTHING that happened to this file, in the past tense it happened in.
-///
-/// `None` only when literally nothing has been done and nothing was encoded --
-/// the file arrived correct, which is itself worth saying.
-///
-/// This has been wrong twice, in opposite directions. It reported the lossless
-/// pass ALONE, which put "nothing needed doing -- this is your own file"
-/// directly above "compressed" and "140.1 MB -> 15.1 MB". The repair for that
-/// borrowed the strings written for what WILL happen, which reads correctly in
-/// Chinese and wrongly in English -- "Audio removed - scale it to 2956x1246" --
-/// so the encode's work was dropped from the list instead, on the reasoning that
-/// the tally and the specification line already covered it.
-///
-/// They do not. The tally covers the SIZE. The specification says the shape the
-/// file ended up in, not that it was cropped rather than scaled to get there,
-/// and it says nothing at all about an opening that was cut. So a run that
-/// cropped the picture, cut its opening and re-encoded the whole thing reported
-/// "去掉了音轨" and stopped. Five strings were the price of not saying that.
-fn did_line(bench: &Bench, lang: Lang) -> Option<String> {
-    let mut did: Vec<String> = bench
-        .material
-        .applied
-        .iter()
-        .map(|applied| match applied {
-            Applied::AudioDropped => text::DIFF_AUDIO.get(lang).to_owned(),
-            Applied::TailCut { was, now } => text::DIFF_TAIL
-                .get(lang)
-                .replace("{was}", &clock(*was))
-                .replace("{now}", &clock(*now)),
-        })
-        .collect();
-
-    if let Some(done) = &bench.encoded {
-        let before = bench.material.facts.picture();
-        let after = done.facts.picture();
-
-        // Cropping and scaling both change the frame size and are not the same
-        // act: one throws picture away, the other keeps all of it at fewer
-        // pixels. Which happened is knowable only from the choice that was made,
-        // because the result looks identical from the outside.
-        let cropped = bench.job.crop.and_then(|choice| choice.window(before));
-        if let Some(window) = cropped {
-            did.push(
-                text::DID_CROP
-                    .get(lang)
-                    .replace("{width}", &window.width.to_string())
-                    .replace("{height}", &window.height.to_string()),
-            );
-        }
-        let mid = cropped.map_or(before, |w| (w.width, w.height));
-        if after != mid {
-            did.push(
-                text::DID_SCALE
-                    .get(lang)
-                    .replace("{width}", &after.0.to_string())
-                    .replace("{height}", &after.1.to_string()),
-            );
-        }
-
-        let was_fps = crate::gate::probe::reported_fps(bench.material.facts.fps);
-        let now_fps = crate::gate::probe::reported_fps(done.facts.fps);
-        if now_fps != was_fps {
-            did.push(
-                text::DID_FPS
-                    .get(lang)
-                    .replace("{limit}", &now_fps.to_string()),
-            );
-        }
-
-        if bench.job.trim.cut_opening > 0.0 {
-            did.push(
-                text::DID_OPENING
-                    .get(lang)
-                    .replace("{shift}", &clock(bench.job.trim.cut_opening)),
-            );
-        }
-
-        // Not said when the source was AV1 already: "converted to AV1" about a
-        // file that arrived as one is a sentence that describes nothing.
-        if bench.material.facts.codec != Some("av1") {
-            did.push(text::DID_CODEC.get(lang).to_owned());
-        }
-    }
-
-    if !did.is_empty() {
-        return Some(did.join(SEP));
-    }
-    bench
-        .encoded
-        .is_none()
-        .then(|| text::DIFF_NOTHING.get(lang).to_owned())
-}
-
-/// What is wrong, in as few words as carry it.
-fn wrong_line(pending: &[Pending], lang: Lang) -> String {
-    pending
-        .iter()
-        .filter(|item| item.is_a_problem())
-        .map(|item| match item {
-            Pending::Scale { .. } => text::SHORT_RESOLUTION.get(lang),
-            Pending::FrameRate { .. } => text::SHORT_FPS.get(lang),
-            Pending::Codec { .. } => text::SHORT_CODEC.get(lang),
-            Pending::OpeningCut { .. } => text::SHORT_OPENING.get(lang),
-            Pending::TooLarge { .. } => text::SHORT_SIZE.get(lang),
-            // Never reached: a request is not a fault, and `wrong_line` is
-            // built from the faults alone.
-            Pending::Crop { .. } => text::SHORT_CROP.get(lang),
-        })
-        .collect::<Vec<_>>()
-        .join(text::LIST_SEP.get(lang))
-}
-
-/// What the next press will do, in one sentence.
-fn will_line(pending: &[Pending], lang: Lang) -> String {
-    let steps: Vec<String> = pending
-        .iter()
-        .map(|item| match item {
-            Pending::Scale { to, .. } => text::WILL_SCALE
-                .get(lang)
-                .replace("{width}", &to.0.to_string())
-                .replace("{height}", &to.1.to_string()),
-            Pending::FrameRate { to, .. } => {
-                text::WILL_FPS.get(lang).replace("{limit}", &to.to_string())
-            }
-            Pending::Codec { .. } => text::WILL_CODEC.get(lang).to_owned(),
-            Pending::OpeningCut { seconds } => text::WILL_OPENING
-                .get(lang)
-                .replace("{shift}", &clock(*seconds)),
-            Pending::TooLarge { limit, .. } => text::WILL_SIZE
-                .get(lang)
-                .replace("{limit}", &limit.div_ceil(1024 * 1024).to_string()),
-            Pending::Crop { to } => text::WILL_CROP
-                .get(lang)
-                .replace("{width}", &to.0.to_string())
-                .replace("{height}", &to.1.to_string()),
-        })
-        .collect();
-    text::WILL_LEAD
-        .get(lang)
-        .replace("{steps}", &steps.join(text::LIST_SEP.get(lang)))
-}
-
-/// What the file IS, as data -- weight included, so the size is stated once in
-/// one rounding. It used to appear as `375.4 MB` in the tally and `376 MB` in a
-/// finding three lines apart, which is two answers to one question.
-///
-/// The codec appears ONCE too: the recipe said `AV1` and the shape said `av1`,
-/// in two cases, on the same line.
-fn spec_line(bench: &Bench, facts: &Facts, bytes: u64) -> String {
-    // The weight is here ONLY when nothing above has already stated it. With a
-    // tally on screen it appears twice on one card, three lines apart.
-    let mut parts = if bench.encoded.is_some() {
-        vec![shape_only(facts)]
-    } else {
-        vec![megabytes(bytes), shape_only(facts)]
-    };
-    if let Some(done) = &bench.encoded {
-        // The CRF, because it is the one parameter that explains the result
-        // and there is no knob for it. NOT the attempt count: "×2" is internal
-        // bookkeeping wearing a symbol nobody can decode.
-        parts.push(format!("CRF {}", done.crf));
-    }
-    parts.join(SEP)
-}
-
-/// How wide a centred block is allowed to be.
-///
-/// 520 in a 960 window was a narrow column with a lot of air either side, and
-/// the narrowness cost lines: a finding worded in German wrapped to three where
-/// it fits in two. 640 keeps prose near a comfortable measure and stops the
-/// window looking like it is using a third of itself.
-const CENTRED_W: f32 = 640.0;
-
-/// Centres a block in whatever is left, at whatever height it turns out to be.
-///
-/// The height is not guessed: it is measured after drawing and remembered, so
-/// the next frame centres the real thing. A guessed height is a card that is
-/// either clipped or floating slightly off-centre, and neither is visible enough
-/// to notice or invisible enough to ignore. The first frame after a change is
-/// off by the difference and the repaint timer settles it before an eye could
-/// follow.
-fn centred(ui: &mut egui::Ui, id: &str, add: impl FnOnce(&mut egui::Ui)) {
-    let key = egui::Id::new(id);
-    let known: Option<f32> = ui.data(|d| d.get_temp(key));
-    let room = ui.available_height();
-
-    // Bounded by a scroll area, and the design is expected never to need it.
-    //
-    // Two different jobs. The debug assertion below is the one that matters: a
-    // screen that has to scroll on a canvas built for it is a design that did
-    // not fit, and it should fail a test. But when it does happen in the field
-    // -- a language nobody measured, a filename nobody imagined -- content that
-    // can be scrolled to is recoverable and content that was clipped away is
-    // simply gone.
-    let out = egui::ScrollArea::vertical()
-        .id_salt(key)
-        .max_height(room)
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            // NO SLACK UNTIL THE HEIGHT IS KNOWN. The first frame draws
-            // top-aligned and measures; every frame after centres what was
-            // measured. Guessing instead -- 140 was the guess -- pads by half
-            // the difference between the guess and the truth, and a card that
-            // turned out to be 368 tall in a body of 456 got 158 above it and
-            // spilled off the bottom.
-            let slack = known.map_or(0.0, |h| ((room - h) / 2.0).max(0.0));
-            ui.add_space(slack);
-
-            let width = ui.available_width().min(CENTRED_W);
-            let mut measured = 0.0;
-            ui.vertical_centered(|ui| {
-                let start = ui.cursor().top();
-                ui.allocate_ui(egui::vec2(width, (room - slack).max(1.0)), add);
-                measured = ui.cursor().top() - start;
-            });
-            measured
-        });
-
-    let measured = out.inner;
-    if known.is_none_or(|h| (measured - h).abs() > 0.5) {
-        ui.data_mut(|d| d.insert_temp(key, measured));
-        ui.ctx().request_repaint();
-    }
-    debug_assert!(
-        measured <= room + 1.0,
-        "{id} needs {measured:.0}px in {room:.0}px, so it will scroll -- it was meant to fit"
-    );
-}
-
-/// A horizontal row of controls, centred on the width it actually takes.
-///
-/// egui has no way to do this directly: `vertical_centered` centres a single
-/// widget, but a `horizontal` layout placed inside it claims the whole width and
-/// lays its contents out from the left edge, so the row ends up in the corner.
-/// So the width is measured after drawing and remembered, the same trick and for
-/// the same reason as [`centred`] on the other axis.
-fn centred_row(ui: &mut egui::Ui, id: &str, add: impl FnOnce(&mut egui::Ui)) {
-    let id = egui::Id::new(id);
-    let known: f32 = ui.data(|d| d.get_temp(id)).unwrap_or(0.0);
-
-    let full = ui.max_rect();
-    // Before it has ever been measured the row gets the whole width, so the
-    // single frame that exists in that state is merely left-aligned rather than
-    // hanging off one side.
-    let width = if known > 0.0 {
-        known.min(full.width())
-    } else {
-        full.width()
-    };
-    let band = egui::Rect::from_min_size(
-        egui::pos2(full.center().x - width / 2.0, full.top()),
-        egui::vec2(width, full.height()),
-    );
-
-    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(band));
-    child.horizontal(|ui| add(ui));
-    let used = child.min_rect();
-
-    // Advanced by what the row ACTUALLY took, not by the band it was offered.
-    // Advancing by the band would report a row that fitted whatever its
-    // contents did, which hides exactly the overflow `region`'s assertion
-    // exists to catch -- and did hide it: a bar two pixels too short for its
-    // own buttons passed a test written to find that.
-    ui.advance_cursor_after_rect(used);
-
-    let measured = used.width();
-
-    if (measured - known).abs() > 0.5 {
-        ui.data_mut(|d| d.insert_temp(id, measured));
-        ui.ctx().request_repaint();
     }
 }
 
@@ -2272,101 +1825,6 @@ fn verdict_card(
     picked
 }
 
-/// The DETERMINISTIC findings: everything whose answer follows from the file.
-///
-/// Size is deliberately absent. It is the one gate rule that is not settled by
-/// looking at the header, and it belongs to Phase B along with the search that
-/// resolves it.
-fn findings(facts: &Facts, crop: Option<crop::Window>, lang: Lang) -> Vec<(String, String)> {
-    let mut out = Vec::new();
-    // What the run will actually be handed. The pixel finding is about the
-    // SOURCE -- that is what is wrong with the file on disk -- but its fix is
-    // about the frame the encode will see, which the crop has already narrowed.
-    let target = crate::plan::plan(facts, None, crop);
-    let frame = crop.map_or(facts.picture(), |w| (w.width, w.height));
-
-    if !limits::codec_allowed(facts.codec) {
-        let named = if facts.raw_fourcc.is_empty() {
-            "?"
-        } else {
-            &facts.raw_fourcc
-        };
-        out.push((
-            text::FINDING_CODEC.get(lang).replace("{codec}", named),
-            text::FIX_CODEC.get(lang).to_owned(),
-        ));
-    }
-    if u64::from(facts.width) * u64::from(facts.height) > limits::MAX_PIXELS {
-        let to = target.size.unwrap_or(frame);
-        // A crop can be the whole fix. Where it is, the bullet says so instead
-        // of naming a scale that is not going to happen.
-        let fix = if target.size.is_none() && crop.is_some() {
-            text::FIX_RESOLUTION_BY_CROP.get(lang)
-        } else {
-            text::FIX_RESOLUTION.get(lang)
-        };
-        out.push((
-            text::FINDING_RESOLUTION
-                .get(lang)
-                .replace("{width}", &facts.width.to_string())
-                .replace("{height}", &facts.height.to_string()),
-            fix.replace("{width}", &to.0.to_string())
-                .replace("{height}", &to.1.to_string()),
-        ));
-    }
-    if crate::gate::probe::over_fps_limit(facts.fps) {
-        out.push((
-            text::FINDING_FPS
-                .get(lang)
-                .replace(
-                    "{fps}",
-                    &crate::gate::probe::reported_fps(facts.fps).to_string(),
-                )
-                .replace("{limit}", &limits::MAX_FPS.to_string()),
-            text::FIX_FPS
-                .get(lang)
-                .replace("{limit}", &limits::MAX_FPS.to_string()),
-        ));
-    }
-    if facts.has_audio {
-        out.push((
-            text::FINDING_AUDIO.get(lang).to_owned(),
-            text::FIX_AUDIO.get(lang).to_owned(),
-        ));
-    }
-    out
-}
-
-fn shape(facts: &Facts, bytes: u64) -> String {
-    format!("{}{SEP}{}", shape_only(facts), megabytes(bytes))
-}
-
-/// The same, without the weight -- for the places that state the weight
-/// separately and larger.
-fn shape_only(facts: &Facts) -> String {
-    format!(
-        "{}{SEP}{}×{}{SEP}{:.0} fps{SEP}{}",
-        facts.codec.unwrap_or(if facts.raw_fourcc.is_empty() {
-            "?"
-        } else {
-            &facts.raw_fourcc
-        }),
-        facts.width,
-        facts.height,
-        facts.fps,
-        clock(facts.duration),
-    )
-}
-
-fn megabytes(bytes: u64) -> String {
-    format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
-}
-
-fn clock(seconds: f64) -> String {
-    let seconds = seconds.max(0.0);
-    format!("{}:{:04.1}", (seconds / 60.0) as u64, seconds % 60.0)
-}
-
 /// Opens the folder with the result selected. Best effort: a tool that cannot
 /// open a file manager has still done its job.
 fn reveal(path: &Path) {
@@ -2378,22 +1836,6 @@ fn reveal(path: &Path) {
     if let Some(dir) = path.parent() {
         let _ = std::process::Command::new("xdg-open").arg(dir).spawn();
     }
-}
-
-/// The inspect screen lists the deterministic problems; the gate reports the
-/// first problem of any kind. They must not contradict each other about the
-/// ones they both cover -- a file the gate refuses for its frame rate with
-/// nothing listed under it is a window disagreeing with the thing it exists to
-/// report.
-///
-/// Size is excluded on both sides, because it is exactly what the inspect screen
-/// declines to have an opinion about.
-#[cfg(test)]
-fn verdict_matches_findings(facts: &Facts, lang: Lang) -> bool {
-    // Under the limit by construction, so `check` can only complain about the
-    // deterministic rules.
-    let refused = !gate::check(0, Some(facts)).passes();
-    refused == !findings(facts, None, lang).is_empty()
 }
 
 #[cfg(test)]

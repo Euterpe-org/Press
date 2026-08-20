@@ -21,21 +21,7 @@
 //! what Press produces is exactly the drift that using the server's recipe
 //! exists to prevent.
 
-use std::path::PathBuf;
-
 use crate::ffmpeg::Ffmpeg;
-
-/// Where the encoder is unpacked. Named, not hidden: a person looking at what
-/// this program put on their disk should be able to tell what it is and where
-/// it came from.
-///
-/// Nothing unpacks anything in a build with no embedded encoder, but the name
-/// is still asserted there -- it is a promise to whoever finds the directory,
-/// not an implementation detail of one build configuration.
-#[cfg_attr(not(embedded_encoder), allow(dead_code))]
-fn cache_dir() -> PathBuf {
-    std::env::temp_dir().join("Euterpe.Press")
-}
 
 #[cfg(embedded_encoder)]
 mod embedded {
@@ -120,8 +106,8 @@ pub fn resolve() -> Option<Ffmpeg> {
 }
 
 #[cfg(embedded_encoder)]
-fn extract() -> std::io::Result<PathBuf> {
-    let dir = cache_dir();
+fn extract() -> std::io::Result<std::path::PathBuf> {
+    let dir = crate::workspace::root();
     std::fs::create_dir_all(&dir)?;
     let path = dir.join(format!("ffmpeg-{}.exe", embedded::STAMP));
 
@@ -165,7 +151,7 @@ mod tests {
 
     #[test]
     fn the_cache_directory_is_named_after_this_program() {
-        let dir = super::cache_dir();
+        let dir = crate::workspace::root();
         assert!(
             dir.ends_with("Euterpe.Press"),
             "a person should be able to tell what put this here: {}",

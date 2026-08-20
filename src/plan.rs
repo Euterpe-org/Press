@@ -28,6 +28,27 @@
 //!
 //! An already-AV1 source is never re-encoded at all: a second generation of loss
 //! measured ~190% and buys nothing.
+//!
+//! # This module is a MIRROR, and some of it Press never drives
+//!
+//! `plan()` is law -- `tests/plan.rs` asserts every scenario the server plans,
+//! field for field, from a recorded snapshot -- so the surface stays whatever
+//! the server's surface is, whether or not Press has a use for all of it.
+//! Reading it as though every part were live is how a stale comment gets
+//! believed, so the divergences are named here rather than discovered:
+//!
+//! * `allowance` and the `trim_to` it produces are the server's duration rule.
+//!   Press passes `None` at every call site: the gate does not judge duration
+//!   (K, 2026-08-17) and a charter's length decision comes from the scrubber
+//!   instead, which [`crate::phase_a`] applies directly.
+//! * [`CRF_ESCALATION`] is the server's ladder. Press does not walk it --
+//!   [`crate::phase_b`] searches the measured CRF/size law instead, which the
+//!   fixed ladder could not do and which is why it was replaced.
+//! * `must_reencode` and `may_try_av1` describe the populations above.
+//!   [`crate::phase_b::aim`] decides Press's own version of that question, from
+//!   the same facts and with more cases than two.
+//!
+//! Everything else here is on the path every run takes.
 
 use crate::crop;
 use crate::gate::{Facts, limits};
@@ -40,9 +61,16 @@ pub const CRF: u32 = 32;
 /// 24-core machine for 720p and 1.9x for 1080p.
 pub const PRESET: u32 = 6;
 
-/// A file over the size limit has to fit, so the quality dial walks down until
-/// it does. Bounded, and the value used is worth showing the user: anything that
-/// only fits at 44 has visibly paid for it.
+/// The server's ladder for a file that will not fit: try 38, then 44.
+///
+/// **Press does not walk it.** Three fixed guesses cannot use what the first one
+/// measured, and could not go finer than 32 at all -- a 94 MB source came back
+/// at 19.2 MB having spent a quarter of the allowance. [`crate::phase_b`]
+/// inverts the measured CRF/size law instead.
+///
+/// Kept, and pinned by `tests/plan.rs`, because it is the server's number: if
+/// the round's ladder moves, that is worth being told about even though nothing
+/// here reads it.
 pub const CRF_ESCALATION: [u32; 2] = [38, 44];
 
 /// A stream copy rewrites no picture, so its output can only grow by container
