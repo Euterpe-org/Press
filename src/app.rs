@@ -169,8 +169,12 @@ struct Bench {
     source: PathBuf,
     source_bytes: u64,
     source_facts: Facts,
-    /// Carried from the scrubber. Applied by Phase B, because it needs `-ss`.
-    opening_cut: f64,
+    /// The charter's trim, WHOLE. The opening is carried here because Phase B
+    /// applies it -- it needs `-ss`, and `-ss` re-encodes -- and the tail is
+    /// carried because the way out of "it will not fit, make it shorter" is the
+    /// scrubber, and arriving there with the end handle reset throws away the
+    /// trim the charter is being told to tighten.
+    trim: Trim,
     /// Carried the same way, and for the same reason: a crop rewrites the
     /// picture, so it happens inside the one encode that does everything else.
     crop: Option<crop::Choice>,
@@ -188,17 +192,50 @@ struct Bench {
 }
 
 /// A Phase B run that ended without a better file, and why.
+///
+/// EVERY variant is rendered. A run that comes back to a card identical to the
+/// one it left reads as a run that never happened, and the charter waited
+/// minutes for it.
 enum Said {
     /// AV1 was tried and came back bigger. The lossless material ships.
+    /// `av1_was` is `None` when the encode was killed on its way past the
+    /// material's weight rather than allowed to finish, which is the ordinary
+    /// case.
     MaterialWins {
         av1_was: Option<u64>,
     },
+    /// The crop or the opening cut could not be carried out at any quality
+    /// without the file gaining weight, so it was not carried out.
+    RequestDropped,
     /// Not even the coarsest quality fits. The remaining lever is length.
     StillTooLarge {
         smallest: u64,
     },
     Cancelled,
     Failed(String),
+}
+
+impl Said {
+    /// Whether pressing the same button again would reach the same answer.
+    ///
+    /// Phase B is deterministic in the material, the aim and the request, and
+    /// none of those change by waiting. Every one of these verdicts is
+    /// therefore final for as long as the bench stands -- offering the run
+    /// again just spends the same minutes arriving at the same screen.
+    fn settled(&self) -> bool {
+        matches!(
+            self,
+            Self::MaterialWins { .. } | Self::RequestDropped | Self::StillTooLarge { .. }
+        )
+    }
+
+    /// Whether there is anything left for the charter to do here.
+    ///
+    /// Only length can rescue a file that will not fit, and only the scrubber
+    /// can shorten it.
+    fn only_a_shorter_video_helps(&self) -> bool {
+        matches!(self, Self::StillTooLarge { .. })
+    }
 }
 
 impl Bench {
@@ -223,8 +260,7 @@ impl Bench {
             return None;
         }
         let facts = &self.material.facts;
-        self.crop
-            .and_then(|choice| choice.window((facts.width, facts.height)))
+        self.crop.and_then(|choice| choice.window(facts.picture()))
     }
 
     /// Everything the next encode would do. Not all of it is a fault.
@@ -234,32 +270,42 @@ impl Bench {
         let cut = if self.encoded.is_some() {
             0.0
         } else {
-            self.opening_cut
+            self.trim.cut_opening
         };
         phase_b::pending(facts, bytes, cut, self.crop_window())
     }
 
     /// Whether anything stands between this file and an upload.
     ///
-    /// A crop and an opening cut do not: the file is uploadable without them
-    /// and merely is not yet what was asked for. Counting them as faults put
-    /// "not ready to upload" over a file that was perfectly ready.
+    /// ASKED OF THE FILE IN HAND, not of the plan for the next encode. Those are
+    /// different questions and the answer used to come from the wrong one:
+    /// `pending()` describes what the encode would do AFTER the crop, so a crop
+    /// that would bring an over-sized picture under the budget erased the fault
+    /// from the list -- and the card then offered Save on a file the server was
+    /// always going to refuse, because the crop had not happened yet.
+    ///
+    /// A crop and an opening cut never appear here at all. The file is
+    /// uploadable without them and merely is not yet what was asked for.
     fn blocked(&self) -> bool {
-        self.pending().iter().any(Pending::is_a_problem)
+        let (_, bytes, facts) = self.have();
+        !crate::gate::check(bytes, Some(facts)).passes()
     }
 
     /// Whether pressing the button again could change anything.
     ///
     /// Once Phase B has handed back a file, Press has given its answer -- there
     /// is no second opinion to ask for, because the quality was not a guess.
+    /// And once it has given a verdict WITHOUT a file, that verdict is just as
+    /// final: the run is deterministic in the material, the aim and the request,
+    /// so a second press spends the same minutes reaching the same screen.
     fn worth_running(&self) -> Option<Aim> {
-        if self.encoded.is_some() {
+        if self.encoded.is_some() || self.said.as_ref().is_some_and(Said::settled) {
             return None;
         }
         phase_b::aim(
             &self.material.facts,
             self.material.bytes,
-            self.opening_cut,
+            self.trim.cut_opening,
             self.crop_window(),
         )
     }
@@ -468,7 +514,10 @@ impl Press {
                 let ready = !bench.blocked();
                 let has_work = !bench.pending().is_empty();
                 let runnable = bench.worth_running();
-                let stuck = matches!(bench.said, Some(Said::StillTooLarge { .. }));
+                let shorter_only = bench
+                    .said
+                    .as_ref()
+                    .is_some_and(Said::only_a_shorter_video_helps);
                 let saved = bench.saved.clone();
                 let mut pressed = None;
 
@@ -494,7 +543,7 @@ impl Press {
                     // Only where it is actionable: the message above says to
                     // trim it shorter, and without this there is nowhere to do
                     // that but drag the file in again.
-                    if stuck && theme::quiet(ui, text::BACK_TO_TRIM.get(lang)).clicked() {
+                    if shorter_only && theme::quiet(ui, text::BACK_TO_TRIM.get(lang)).clicked() {
                         pressed = Some(Act::BackToTrim);
                     }
 
@@ -523,10 +572,13 @@ impl Press {
                         return;
                     }
 
-                    // Hidden when stuck: the search already reached the coarsest
-                    // quality there is, so pressing again spends minutes on the
-                    // same answer. The way out is a shorter video.
-                    let offer_run = runnable.is_some() && !stuck;
+                    // `worth_running` is the only judge of this now. It refuses
+                    // once a run has produced a file AND once a run has produced
+                    // a verdict, because Phase B is deterministic in everything
+                    // the bench holds -- pressing again spends the same minutes
+                    // reaching the same screen. The action bar used to make that
+                    // call itself, and made it only for one verdict out of four.
+                    let offer_run = runnable.is_some();
                     if offer_run {
                         // "Make it smaller" only when that is genuinely all
                         // there is left to do. With a crop or an opening cut
@@ -643,9 +695,17 @@ impl Press {
         self.texture = None;
         self.shown_pts = f64::NAN;
 
-        let Ok(bytes) = std::fs::read(path) else {
-            self.stage = Stage::Empty;
-            return;
+        // SAID, not swallowed. A drop that resets to the empty screen with
+        // nothing written on it is indistinguishable from a drop that was never
+        // noticed, and the charter drags the same file in again and again. This
+        // is a real dead end -- a file another program has open for writing, a
+        // disconnected drive -- and it has a reason worth reading.
+        let bytes = match std::fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                self.give_up(&format!("could not read {}: {error}", path.display()));
+                return;
+            }
         };
         let source_bytes = bytes.len() as u64;
         let (facts, _) = gate::judge(&bytes);
@@ -653,7 +713,13 @@ impl Press {
 
         let preview = match (&facts, &self.ffmpeg) {
             (Some(f), Some(ffmpeg)) => {
-                let preview = Preview::open(ffmpeg.binary(), path, f.width, f.height, f.fps);
+                // The frame ffmpeg will decode, not the one `stsd` describes.
+                // The viewfinder scales to a box of exactly this shape, so on a
+                // rotated clip it was squeezing an upright picture into a
+                // landscape box -- and the crop rectangle was drawn on top of
+                // that, aimed at the wrong axis.
+                let (w, h) = f.picture();
+                let preview = Preview::open(ffmpeg.binary(), path, w, h, f.fps);
                 // Something on screen immediately: an empty frame under a
                 // verdict reads as a decoder that failed.
                 preview.seek(0.0);
@@ -827,7 +893,7 @@ impl Press {
             unreachable!("checked above");
         };
         let bench = *bench;
-        let opening_cut = bench.opening_cut;
+        let opening_cut = bench.trim.cut_opening;
         let work = Arc::clone(&bench.work);
         let window = bench.crop_window();
 
@@ -872,10 +938,13 @@ impl Press {
             held: Held {
                 source_bytes: bench.source_bytes,
                 source_facts: bench.source_facts,
-                trim: Trim {
-                    cut_opening: opening_cut,
-                    keep_until: None,
-                },
+                // CARRIED WHOLE, and untouched by this phase. Phase B is told
+                // its opening cut as an argument; `held.trim` is the charter's
+                // own trim, on its way to whichever screen comes next. Blanking
+                // the tail here -- on the grounds that Phase A had already cut
+                // it -- is what left the scrubber with no end handle after a
+                // run that ended by advising a shorter video.
+                trim: bench.trim,
                 crop: bench.crop,
                 material: Some(bench.material),
                 encoded: bench.encoded,
@@ -895,6 +964,7 @@ impl Press {
                 None
             }
             phase_b::Outcome::MaterialWins { av1_was } => Some(Said::MaterialWins { av1_was }),
+            phase_b::Outcome::RequestDropped => Some(Said::RequestDropped),
             phase_b::Outcome::StillTooLarge { smallest } => Some(Said::StillTooLarge { smallest }),
             phase_b::Outcome::Cancelled => Some(Said::Cancelled),
             phase_b::Outcome::Failed(reason) => Some(Said::Failed(reason)),
@@ -918,7 +988,7 @@ impl Press {
             source: working.source,
             source_bytes: working.held.source_bytes,
             source_facts: working.held.source_facts,
-            opening_cut: working.held.trim.cut_opening,
+            trim: working.held.trim,
             crop: working.held.crop,
             material,
             encoded: working.held.encoded,
@@ -950,7 +1020,14 @@ impl Press {
         else {
             return;
         };
+        // Already there. Copying a file onto itself truncates it, so the copy is
+        // skipped -- but the SAVE is not: the charter picked a destination and
+        // the file they wanted is sitting at it. Returning quietly left the card
+        // still offering "save", which reads as a save that failed.
         if same_file(&from, &to) {
+            if let Stage::Bench(bench) = &mut self.stage {
+                bench.saved = Some(to);
+            }
             return;
         }
         // Copied rather than renamed: the workspace lives on the temp volume,
@@ -988,8 +1065,14 @@ impl Press {
         );
     }
 
-    /// Back to the scrubber from the bench, keeping the opening cut so the
-    /// advice to "trim it shorter" has somewhere to be taken.
+    /// Back to the scrubber from the bench, with BOTH handles where the charter
+    /// left them.
+    ///
+    /// This screen is reached from "even at the lowest quality it will not fit
+    /// -- make it shorter", so the trim is the entire point of arriving. Rebuilt
+    /// with only the opening kept, it discarded the end handle and offered the
+    /// full source back: shortening a sixty-second trim by five seconds instead
+    /// lengthened it by fifty.
     fn back_to_inspect(&mut self) {
         let Stage::Bench(bench) = std::mem::replace(&mut self.stage, Stage::Empty) else {
             return;
@@ -999,10 +1082,7 @@ impl Press {
             bench.source,
             bench.source_bytes,
             bench.source_facts,
-            Trim {
-                cut_opening: bench.opening_cut,
-                keep_until: None,
-            },
+            bench.trim,
             bench.crop,
         );
     }
@@ -1380,72 +1460,12 @@ impl Press {
                 theme::muted(ui, &file_name(&bench.source));
                 ui.add_space(space::BLOCK);
 
-                let (hero, colour) = match (&bench.said, bench.encoded.is_some(), blocked) {
-                    (Some(Said::Failed(_)), ..) => (text::FAILED.get(lang), theme::ALARM),
-                    (Some(Said::StillTooLarge { .. }), ..) => {
-                        (text::STILL_TOO_LARGE.get(lang), theme::NOTICE)
-                    }
-                    // "Compressed" is claimed only where it is true. A crop
-                    // has to be re-encoded, and a re-encode of an already-
-                    // efficient file can come back larger -- a fair outcome,
-                    // and not one to put a congratulation on.
-                    (_, true, false) => (
-                        if bench
-                            .encoded
-                            .as_ref()
-                            .is_some_and(|d| d.bytes < bench.source_bytes)
-                        {
-                            text::BENCH_COMPRESSED.get(lang)
-                        } else {
-                            text::BENCH_APPLIED.get(lang)
-                        },
-                        theme::GOOD,
-                    ),
-                    // Neither good news nor bad, so neither green nor amber:
-                    // a plain statement that there is a press outstanding.
-                    (_, false, false) if requested => (text::BENCH_WAITING.get(lang), theme::INK),
-                    (_, _, false) => (text::BENCH_READY.get(lang), theme::GOOD),
-                    (_, _, true) => (text::NOT_READY.get(lang), theme::NOTICE),
-                };
+                let (hero, colour) = headline(bench, blocked, requested, lang);
                 theme::heading(ui, hero, colour);
                 ui.add_space(space::TIGHT);
 
-                // ONE line under the headline, and which one depends entirely on
-                // what the headline just said.
-                match &bench.said {
-                    Some(Said::Failed(reason)) => theme::line(ui, reason, theme::INK),
-                    Some(Said::StillTooLarge { smallest }) => theme::line(
-                        ui,
-                        &text::STILL_TOO_LARGE_DETAIL
-                            .get(lang)
-                            .replace("{size}", &smallest.div_ceil(1024 * 1024).to_string())
-                            .replace(
-                                "{limit}",
-                                &limits::MAX_BYTES.div_ceil(1024 * 1024).to_string(),
-                            ),
-                        theme::INK,
-                    ),
-                    _ if blocked => {
-                        // What is wrong, in as few words as carry it. The
-                        // numbers are on the specification line below.
-                        theme::line(ui, &wrong_line(&pending, lang), theme::INK);
-                    }
-                    // AV1 was tried and lost. Press made that choice on the
-                    // charter's behalf, so it shows the number it decided on.
-                    Some(Said::MaterialWins { av1_was: Some(was) }) => theme::line(
-                        ui,
-                        &text::SAID_MATERIAL_WINS
-                            .get(lang)
-                            .replace("{size}", &megabytes(*was)),
-                        theme::INK,
-                    ),
-                    // Ready. The line answers "and what did my press do" --
-                    // where the numbers below have not already answered it.
-                    _ => {
-                        if let Some(did) = did_line(bench, lang) {
-                            theme::line(ui, &did, theme::INK);
-                        }
-                    }
+                if let Some(under) = under_headline(bench, &pending, blocked, lang) {
+                    theme::line(ui, &under, theme::INK);
                 }
 
                 // The number, only where an ENCODE produced it. The lossless
@@ -1464,12 +1484,12 @@ impl Press {
                 }
 
                 // What the next press will do -- one line, not a bulleted list
-                // that restates each problem underneath itself.
-                let stuck = matches!(
-                    bench.said,
-                    Some(Said::StillTooLarge { .. } | Said::Failed(_))
-                );
-                if !pending.is_empty() && !stuck {
+                // that restates each problem underneath itself. Suppressed
+                // wherever there is no next press: describing an action the
+                // action bar is not offering is a description of nothing. The
+                // two used to disagree about `Failed`, which drew a loud button
+                // under a red headline with its explanation deliberately hidden.
+                if !pending.is_empty() && bench.worth_running().is_some() {
                     ui.add_space(space::ROW);
                     theme::muted(ui, &will_line(&pending, lang));
                 }
@@ -1487,6 +1507,92 @@ impl Press {
         });
     }
 }
+/// The headline, and the colour that carries its tone.
+///
+/// SEPARATE FROM THE PAINTING, so the test that reads every card in every
+/// language reads the real decision instead of a hand-copy of it. It was a
+/// hand-copy, and it had already drifted: the copy said "compressed" for every
+/// encode while the card had learnt to say "done" for one that grew -- so the
+/// test written to catch exactly that class of wording bug was blind to the two
+/// branches added for it.
+fn headline(
+    bench: &Bench,
+    blocked: bool,
+    requested: bool,
+    lang: Lang,
+) -> (&'static str, egui::Color32) {
+    match (&bench.said, bench.encoded.is_some(), blocked) {
+        (Some(Said::Failed(_)), ..) => (text::FAILED.get(lang), theme::ALARM),
+        (Some(Said::StillTooLarge { .. }), ..) => (text::STILL_TOO_LARGE.get(lang), theme::NOTICE),
+        // The file is fine; it is the crop that did not happen. Amber, not
+        // green -- the charter asked for something and did not get it -- and
+        // never "ready", which would be true and beside the point.
+        (Some(Said::RequestDropped), ..) => (text::REQUEST_DROPPED.get(lang), theme::NOTICE),
+        // Stopped by hand. Said plainly, because the alternative was the screen
+        // the charter pressed Stop on, unchanged -- which reads as a Stop that
+        // did not work.
+        (Some(Said::Cancelled), ..) => (text::CANCELLED.get(lang), theme::INK),
+        // "Compressed" is claimed only where it is true. A crop has to be
+        // re-encoded, and a re-encode of an already-efficient file can come back
+        // larger -- a fair outcome, and not one to put a congratulation on.
+        (_, true, false) => (
+            if bench
+                .encoded
+                .as_ref()
+                .is_some_and(|d| d.bytes < bench.source_bytes)
+            {
+                text::BENCH_COMPRESSED.get(lang)
+            } else {
+                text::BENCH_APPLIED.get(lang)
+            },
+            theme::GOOD,
+        ),
+        // Neither good news nor bad, so neither green nor amber: a plain
+        // statement that there is a press outstanding.
+        (_, false, false) if requested => (text::BENCH_WAITING.get(lang), theme::INK),
+        (_, _, false) => (text::BENCH_READY.get(lang), theme::GOOD),
+        (_, _, true) => (text::NOT_READY.get(lang), theme::NOTICE),
+    }
+}
+
+/// ONE line under the headline, and which one depends entirely on what the
+/// headline just said.
+fn under_headline(bench: &Bench, pending: &[Pending], blocked: bool, lang: Lang) -> Option<String> {
+    match &bench.said {
+        Some(Said::Failed(reason)) => Some(reason.clone()),
+        Some(Said::StillTooLarge { smallest }) => Some(
+            text::STILL_TOO_LARGE_DETAIL
+                .get(lang)
+                .replace("{size}", &smallest.div_ceil(1024 * 1024).to_string())
+                .replace(
+                    "{limit}",
+                    &limits::MAX_BYTES.div_ceil(1024 * 1024).to_string(),
+                ),
+        ),
+        // Why the request was dropped, since the headline only says that it was.
+        Some(Said::RequestDropped) => Some(text::REQUEST_DROPPED_DETAIL.get(lang).to_owned()),
+        // AV1 was tried and lost. Press made that choice on the charter's
+        // behalf, so it says what the choice was -- with the number where there
+        // is one, and without inventing one where the encode was killed on its
+        // way past the material's weight rather than allowed to finish. Saying
+        // nothing at all left a minutes-long run looking like a no-op.
+        Some(Said::MaterialWins { av1_was }) => Some(match av1_was {
+            Some(was) => text::SAID_MATERIAL_WINS
+                .get(lang)
+                .replace("{size}", &megabytes(*was)),
+            None => text::SAID_MATERIAL_WINS_UNMEASURED.get(lang).to_owned(),
+        }),
+        // The only thing worth saying about a stop is whether it cost anything.
+        Some(Said::Cancelled) => Some(text::CANCELLED_DETAIL.get(lang).to_owned()),
+        // What is wrong, in as few words as carry it. The numbers are on the
+        // specification line below.
+        _ if blocked => Some(wrong_line(pending, lang)),
+        // Ready. The line answers "and what did my press do" -- where the
+        // numbers below have not already answered it.
+        _ => did_line(bench, lang),
+    }
+}
+
 /// Just the name. On the bench there is exactly one file in play, and the
 /// folder it came from is answered on the screen where it was chosen.
 fn file_name(path: &Path) -> String {
@@ -1570,8 +1676,8 @@ fn did_line(bench: &Bench, lang: Lang) -> Option<String> {
         .collect();
 
     if let Some(done) = &bench.encoded {
-        let before = (bench.material.facts.width, bench.material.facts.height);
-        let after = (done.facts.width, done.facts.height);
+        let before = bench.material.facts.picture();
+        let after = done.facts.picture();
 
         // Cropping and scaling both change the frame size and are not the same
         // act: one throws picture away, the other keeps all of it at fewer
@@ -1606,11 +1712,11 @@ fn did_line(bench: &Bench, lang: Lang) -> Option<String> {
             );
         }
 
-        if bench.opening_cut > 0.0 {
+        if bench.trim.cut_opening > 0.0 {
             did.push(
                 text::DID_OPENING
                     .get(lang)
-                    .replace("{shift}", &clock(bench.opening_cut)),
+                    .replace("{shift}", &clock(bench.trim.cut_opening)),
             );
         }
 
@@ -1844,7 +1950,7 @@ fn workbench_column(
     let source = loaded
         .facts
         .as_ref()
-        .map_or((0, 0), |facts| (facts.width, facts.height));
+        .map_or((0, 0), |facts| facts.picture());
     let mut crop = loaded.crop;
     region(ui, "the viewport", glass, |ui| {
         viewport(ui, texture, glass.size(), source, &mut crop);
@@ -2119,7 +2225,14 @@ fn verdict_card(
         // be, which nothing short of encoding it will say. Naming it on a screen
         // where every other line is settled would promise an answer Press does
         // not have yet.
-        let deterministic = findings(facts, lang);
+        // WITH THE CROP, because the crop is chosen on this very card and the
+        // scale is decided from the picture that survives it. Passing `None` made
+        // the resolution bullet promise a scale computed for a frame that would
+        // never exist -- and on a 2560x1960 source, picking 16:9 brings it to
+        // exactly the pixel budget, so the bullet went on promising a scale that
+        // the run does not perform at all.
+        let window = chose.and_then(|c: crop::Choice| c.window(facts.picture()));
+        let deterministic = findings(facts, window, lang);
         if deterministic.is_empty() {
             theme::heading(ui, text::PHASE_A_CLEAR.get(lang), theme::GOOD);
             ui.add_space(space::TIGHT);
@@ -2157,7 +2270,7 @@ fn verdict_card(
         // Shown only when the source is neither of the two shapes players are
         // usually on -- offering a 16:9 crop of a 16:9 video is a decision put
         // in front of somebody for no reason.
-        let source = (facts.width, facts.height);
+        let source = facts.picture();
         if crop::is_unusual(source) {
             ui.add_space(space::BLOCK);
             theme::line(ui, text::CROP_OFFER.get(lang), theme::INK);
@@ -2231,8 +2344,13 @@ fn verdict_card(
 /// Size is deliberately absent. It is the one gate rule that is not settled by
 /// looking at the header, and it belongs to Phase B along with the search that
 /// resolves it.
-fn findings(facts: &Facts, lang: Lang) -> Vec<(String, String)> {
+fn findings(facts: &Facts, crop: Option<crop::Window>, lang: Lang) -> Vec<(String, String)> {
     let mut out = Vec::new();
+    // What the run will actually be handed. The pixel finding is about the
+    // SOURCE -- that is what is wrong with the file on disk -- but its fix is
+    // about the frame the encode will see, which the crop has already narrowed.
+    let target = crate::plan::plan(facts, None, crop);
+    let frame = crop.map_or(facts.picture(), |w| (w.width, w.height));
 
     if !limits::codec_allowed(facts.codec) {
         let named = if facts.raw_fourcc.is_empty() {
@@ -2246,18 +2364,21 @@ fn findings(facts: &Facts, lang: Lang) -> Vec<(String, String)> {
         ));
     }
     if u64::from(facts.width) * u64::from(facts.height) > limits::MAX_PIXELS {
-        let target = crate::plan::plan(facts, None, None)
-            .size
-            .unwrap_or((facts.width, facts.height));
+        let to = target.size.unwrap_or(frame);
+        // A crop can be the whole fix. Where it is, the bullet says so instead
+        // of naming a scale that is not going to happen.
+        let fix = if target.size.is_none() && crop.is_some() {
+            text::FIX_RESOLUTION_BY_CROP.get(lang)
+        } else {
+            text::FIX_RESOLUTION.get(lang)
+        };
         out.push((
             text::FINDING_RESOLUTION
                 .get(lang)
                 .replace("{width}", &facts.width.to_string())
                 .replace("{height}", &facts.height.to_string()),
-            text::FIX_RESOLUTION
-                .get(lang)
-                .replace("{width}", &target.0.to_string())
-                .replace("{height}", &target.1.to_string()),
+            fix.replace("{width}", &to.0.to_string())
+                .replace("{height}", &to.1.to_string()),
         ));
     }
     if crate::gate::probe::over_fps_limit(facts.fps) {
@@ -2339,7 +2460,7 @@ fn verdict_matches_findings(facts: &Facts, lang: Lang) -> bool {
     // Under the limit by construction, so `check` can only complain about the
     // deterministic rules.
     let refused = !gate::check(0, Some(facts)).passes();
-    refused == !findings(facts, lang).is_empty()
+    refused == !findings(facts, None, lang).is_empty()
 }
 
 #[cfg(test)]
@@ -2388,7 +2509,7 @@ mod tests {
     fn no_finding_renders_with_an_unfilled_placeholder() {
         every_fixture(|facts, _bytes, path| {
             for lang in Lang::ALL {
-                for (finding, fix) in findings(facts, lang) {
+                for (finding, fix) in findings(facts, None, lang) {
                     for rendered in [&finding, &fix] {
                         assert!(
                             !rendered.contains('{') && !rendered.contains('}'),
@@ -2458,6 +2579,7 @@ mod tests {
             codec: Some(codec),
             raw_fourcc: codec.to_owned(),
             has_audio: false,
+            quarter_turned: false,
         }
     }
 
@@ -2466,7 +2588,10 @@ mod tests {
             source: PathBuf::from(LONG),
             source_bytes: 98_000_000,
             source_facts: facts_of("h264", 3840, 2160, 120.0),
-            opening_cut: 1.5,
+            trim: Trim {
+                cut_opening: 1.5,
+                keep_until: None,
+            },
             crop: None,
             material: Box::new(Material::for_test(
                 PathBuf::from(LONG),
@@ -2575,7 +2700,10 @@ mod tests {
                 // is the case that decides whether the card still fits.
                 Bench {
                     crop: Some(crop::Choice::centred(crop::Shape::Wide)),
-                    opening_cut: 1.2,
+                    trim: Trim {
+                        cut_opening: 1.2,
+                        keep_until: None,
+                    },
                     source_facts: facts_of("vp09", 5120, 2160, 120.0),
                     material: Box::new(Material::for_test(
                         PathBuf::from(LONG),
@@ -2622,6 +2750,26 @@ mod tests {
                     )),
                     ..a_bench(vec![], None, None)
                 },
+                // THE ENCODE THAT GREW. The screenshot that started all of this:
+                // cropped, audio dropped, and the file came back heavier. The
+                // headline must not say "compressed" and the delta must state
+                // the growth -- neither of which any other bench here exercises,
+                // because every other encode is smaller than its source.
+                Bench {
+                    source_bytes: 2_689_216,
+                    crop: Some(crop::Choice::centred(crop::Shape::Wide)),
+                    ..a_bench(
+                        vec![Applied::AudioDropped],
+                        Some(Box::new(Encoded {
+                            path: PathBuf::from(LONG),
+                            bytes: 3_200_000,
+                            facts: facts_of("av1", 720, 404, 30.0),
+                            crf: 20,
+                            encodes: 1,
+                        })),
+                        None,
+                    )
+                },
                 a_bench(
                     vec![Applied::AudioDropped],
                     None,
@@ -2629,6 +2777,22 @@ mod tests {
                         av1_was: Some(112_000_000),
                     }),
                 ),
+                // The ordinary way AV1 loses: killed on its way past the
+                // material's weight, so there is no measurement to quote.
+                a_bench(
+                    vec![Applied::AudioDropped],
+                    None,
+                    Some(Said::MaterialWins { av1_was: None }),
+                ),
+                // A crop that could not be carried out without gaining weight.
+                Bench {
+                    crop: Some(crop::Choice::centred(crop::Shape::Wide)),
+                    ..a_bench(
+                        vec![Applied::AudioDropped],
+                        None,
+                        Some(Said::RequestDropped),
+                    )
+                },
                 a_bench(
                     vec![Applied::AudioDropped],
                     None,
@@ -2675,24 +2839,12 @@ mod tests {
         let (_, bytes, facts) = bench.have();
         let mut lines = vec![file_name(&bench.source)];
 
-        // The same decision the card makes, so a wording bug shows up here
+        // THE CARD'S OWN FUNCTIONS, not a restatement of them. Every line below
+        // comes from the code that paints it, so a wording bug shows up here
         // rather than in a screenshot.
-        lines.push(
-            match (&bench.said, bench.encoded.is_some(), blocked) {
-                (Some(Said::Failed(_)), ..) => text::FAILED.get(lang),
-                (Some(Said::StillTooLarge { .. }), ..) => text::STILL_TOO_LARGE.get(lang),
-                (_, true, false) => text::BENCH_COMPRESSED.get(lang),
-                (_, false, false) if requested => text::BENCH_WAITING.get(lang),
-                (_, _, false) => text::BENCH_READY.get(lang),
-                (_, _, true) => text::NOT_READY.get(lang),
-            }
-            .to_owned(),
-        );
-
-        if bench.blocked() {
-            lines.push(wrong_line(&pending, lang));
-        } else if let Some(did) = did_line(bench, lang) {
-            lines.push(did);
+        lines.push(headline(bench, blocked, requested, lang).0.to_owned());
+        if let Some(under) = under_headline(bench, &pending, blocked, lang) {
+            lines.push(under);
         }
         if let Some(done) = &bench.encoded {
             lines.push(format!(
@@ -2700,16 +2852,11 @@ mod tests {
                 megabytes(bench.source_bytes),
                 megabytes(done.bytes)
             ));
-            if done.bytes < bench.source_bytes {
-                let saved = 100.0 - done.bytes as f64 / bench.source_bytes as f64 * 100.0;
-                lines.push(
-                    text::BENCH_SMALLER
-                        .get(lang)
-                        .replace("{percent}", &format!("{saved:.0}")),
-                );
+            if let Some(delta) = delta_line(bench, lang) {
+                lines.push(delta);
             }
         }
-        if !pending.is_empty() {
+        if !pending.is_empty() && bench.worth_running().is_some() {
             lines.push(will_line(&pending, lang));
         }
         lines.push(spec_line(bench, facts, bytes));
@@ -2754,7 +2901,7 @@ mod tests {
                 source: PathBuf::from(LONG),
                 source_bytes,
                 source_facts: source,
-                opening_cut: 0.0,
+                trim: Trim::default(),
                 crop: None,
                 material: Box::new(Material::for_test(
                     PathBuf::from(LONG),
@@ -2834,7 +2981,7 @@ mod tests {
                     })),
                 );
                 bench.crop = Some(crop::Choice::centred(crop::Shape::Wide));
-                bench.opening_cut = 1.2;
+                bench.trim.cut_opening = 1.2;
                 bench
             }),
             ("a crop asked for and not yet applied", {
@@ -2864,6 +3011,68 @@ mod tests {
                     })),
                 ),
             ),
+            // THE SCREENSHOT THAT STARTED IT. Audio dropped, picture cropped,
+            // and the file came back heavier. `Aim::Apply` no longer lets this
+            // happen for a crop -- it drops the request instead, which is the
+            // case below -- but `Aim::Repair` deliberately can: with nothing to
+            // fall back on, a fixed file that gained a few percent beats a
+            // broken one. So the two branches written for it still have to be
+            // right, and every other encode here is smaller than its source.
+            ("an encode that came back heavier", {
+                let mut bench = shape(
+                    facts_of("h264", 720, 720, 30.0),
+                    2_689_216,
+                    vec![Applied::AudioDropped],
+                    2_399_618,
+                    Some(Box::new(Encoded {
+                        path: PathBuf::from(LONG),
+                        bytes: 3_200_000,
+                        facts: facts_of("av1", 720, 404, 30.0),
+                        crf: 20,
+                        encodes: 1,
+                    })),
+                );
+                bench.crop = Some(crop::Choice::centred(crop::Shape::Wide));
+                bench
+            }),
+            // And the answer to it: the request goes rather than the weight.
+            ("a crop that could not be afforded", {
+                let mut bench = shape(
+                    facts_of("h264", 720, 720, 30.0),
+                    2_689_216,
+                    vec![Applied::AudioDropped],
+                    2_399_618,
+                    None,
+                );
+                bench.crop = Some(crop::Choice::centred(crop::Shape::Wide));
+                bench.said = Some(Said::RequestDropped);
+                bench
+            }),
+            // AV1 tried and lost, with no measurement to quote -- which is the
+            // ordinary way it loses, since the encode is killed on its way past
+            // the material's weight rather than allowed to finish.
+            ("av1 lost, unmeasured", {
+                let mut bench = shape(
+                    small(),
+                    38_800_000,
+                    vec![Applied::AudioDropped],
+                    38_800_000,
+                    None,
+                );
+                bench.said = Some(Said::MaterialWins { av1_was: None });
+                bench
+            }),
+            ("stopped by hand", {
+                let mut bench = shape(
+                    small(),
+                    38_800_000,
+                    vec![Applied::AudioDropped],
+                    38_800_000,
+                    None,
+                );
+                bench.said = Some(Said::Cancelled);
+                bench
+            }),
         ]
     }
 

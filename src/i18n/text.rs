@@ -309,6 +309,25 @@ pub static FIX_RESOLUTION: Text = Text {
     ru: "будет уменьшено до {width}×{height}",
 };
 
+/// The same finding, where the charter's crop already answers it and no scale
+/// is going to run.
+pub static FIX_RESOLUTION_BY_CROP: Text = Text {
+    en: "the crop brings it to {width}×{height}",
+    zh_hans: "裁完就是 {width}×{height}，够了",
+    zh_hant: "裁完就是 {width}×{height}，夠了",
+    ja: "切り抜きで {width}×{height} になり、これで足ります",
+    ko: "잘라내면 {width}×{height}가 되어 충분합니다",
+    de: "der Zuschnitt bringt es auf {width}×{height}",
+    es: "el recorte lo deja en {width}×{height}",
+    fr: "le recadrage l'amène à {width}×{height}",
+    hr: "rezanje ga svodi na {width}×{height}",
+    hu: "a vágás {width}×{height} méretre hozza",
+    id: "pemotongan membawanya ke {width}×{height}",
+    nl: "de uitsnede brengt het op {width}×{height}",
+    pt: "o corte o deixa em {width}×{height}",
+    ru: "обрезка доводит его до {width}×{height}",
+};
+
 pub static FINDING_FPS: Text = Text {
     en: "{fps} fps, over the {limit} fps limit",
     zh_hans: "{fps} fps，超过 {limit} fps 上限",
@@ -620,21 +639,42 @@ pub static STEP_VERIFYING: Text = Text {
 
 // ── the result ───────────────────────────────────────────────────────────
 
+/// The headline. A PHRASE, like every other headline on that card -- it used to
+/// be a whole sentence with its own full stop, which is the line under the
+/// headline's job.
 pub static CANCELLED: Text = Text {
-    en: "Stopped. Nothing was written.",
-    zh_hans: "已停止，没有写出任何文件。",
-    zh_hant: "已停止，沒有寫出任何檔案。",
-    ja: "中断しました。ファイルは作成されていません。",
-    ko: "중단했습니다. 파일은 만들어지지 않았습니다.",
-    de: "Angehalten. Es wurde nichts geschrieben.",
-    es: "Detenido. No se escribió nada.",
-    fr: "Arrêté. Rien n'a été écrit.",
-    hr: "Zaustavljeno. Ništa nije zapisano.",
-    hu: "Leállítva. Semmi sem íródott ki.",
-    id: "Dihentikan. Tidak ada yang ditulis.",
-    nl: "Gestopt. Er is niets weggeschreven.",
-    pt: "Interrompido. Nada foi gravado.",
-    ru: "Остановлено. Ничего не записано.",
+    en: "Stopped",
+    zh_hans: "已停止",
+    zh_hant: "已停止",
+    ja: "中断しました",
+    ko: "중단했습니다",
+    de: "Angehalten",
+    es: "Detenido",
+    fr: "Arrêté",
+    hr: "Zaustavljeno",
+    hu: "Leállítva",
+    id: "Dihentikan",
+    nl: "Gestopt",
+    pt: "Interrompido",
+    ru: "Остановлено",
+};
+
+/// And the question it leaves: was anything lost.
+pub static CANCELLED_DETAIL: Text = Text {
+    en: "Nothing was written. Your file is untouched.",
+    zh_hans: "没有写出任何文件，你的原文件也没动过。",
+    zh_hant: "沒有寫出任何檔案，你的原檔也沒動過。",
+    ja: "ファイルは作成されておらず、元のファイルもそのままです。",
+    ko: "파일은 만들어지지 않았고 원본도 그대로입니다.",
+    de: "Es wurde nichts geschrieben. Deine Datei ist unberührt.",
+    es: "No se escribió nada. Tu archivo está intacto.",
+    fr: "Rien n'a été écrit. Ton fichier est intact.",
+    hr: "Ništa nije zapisano. Tvoja datoteka je netaknuta.",
+    hu: "Semmi sem íródott ki. Az eredeti fájlod érintetlen.",
+    id: "Tidak ada yang ditulis. Berkas aslimu tidak tersentuh.",
+    nl: "Er is niets weggeschreven. Je bestand is onaangeroerd.",
+    pt: "Nada foi gravado. O teu ficheiro está intacto.",
+    ru: "Ничего не записано. Ваш файл не тронут.",
 };
 
 pub static FAILED: Text = Text {
@@ -1442,6 +1482,72 @@ pub static SAID_MATERIAL_WINS: Text = Text {
     nl: "AV1 werd {size}, dus is het origineel behouden",
     pt: "O AV1 ficou com {size}, então o original foi mantido",
     ru: "AV1 вышел на {size}, поэтому остался оригинал",
+};
+
+/// The same verdict, where the encode was killed on its way past the original's
+/// weight instead of being allowed to finish. There is no measurement to quote,
+/// and inventing one from a projection would be worse than saying less.
+pub static SAID_MATERIAL_WINS_UNMEASURED: Text = Text {
+    en: "AV1 was heading past the original's size, so the original was kept",
+    zh_hans: "转 AV1 越压越大，所以保留了原编码",
+    zh_hant: "轉 AV1 越壓越大，所以保留了原編碼",
+    ja: "AV1 では元より大きくなる見込みだったため、元のまま残しました",
+    ko: "AV1으로는 원본보다 커질 상황이라 원본을 유지했습니다",
+    de: "AV1 lief über die Größe des Originals hinaus, also blieb das Original",
+    es: "El AV1 iba a superar el tamaño del original, así que se conservó el original",
+    fr: "L'AV1 dépassait la taille de l'original, celui-ci a donc été conservé",
+    hr: "AV1 je prelazio veličinu izvornika, pa je zadržan izvornik",
+    hu: "Az AV1 túllépte volna az eredeti méretét, így maradt az eredeti",
+    id: "AV1 akan melampaui ukuran aslinya, jadi aslinya dipertahankan",
+    nl: "AV1 ging de grootte van het origineel voorbij, dus is het origineel behouden",
+    pt: "O AV1 ia ultrapassar o tamanho do original, então o original foi mantido",
+    ru: "AV1 выходил за размер оригинала, поэтому остался оригинал",
+};
+
+/// The crop, or the opening cut, could not be carried out at any quality without
+/// the file gaining weight.
+pub static REQUEST_DROPPED: Text = Text {
+    en: "Your change was not applied",
+    zh_hans: "你要的改动没做成",
+    zh_hant: "你要的改動沒做成",
+    ja: "指定した変更は適用できませんでした",
+    ko: "요청한 변경을 적용하지 못했습니다",
+    de: "Deine Änderung wurde nicht angewendet",
+    es: "Tu cambio no se aplicó",
+    fr: "Ta modification n'a pas été appliquée",
+    hr: "Tvoja promjena nije primijenjena",
+    hu: "A kért módosítás nem valósult meg",
+    id: "Perubahanmu tidak diterapkan",
+    nl: "Je wijziging is niet toegepast",
+    pt: "A tua alteração não foi aplicada",
+    ru: "Ваше изменение не применено",
+};
+
+pub static REQUEST_DROPPED_DETAIL: Text = Text {
+    en: "Every quality it was tried at came back heavier than the original, so \
+         the original was kept as it is. It uploads either way.",
+    zh_hans: "每个画质压出来都比原文件更大，所以原样保留了。反正它本来就能上传。",
+    zh_hant: "每個畫質壓出來都比原檔更大，所以原樣保留了。反正它本來就能上傳。",
+    ja: "どの画質で試しても元より大きくなったため、元のまま残しました。いずれにせよアップロードできます。",
+    ko: "어떤 화질로 시도해도 원본보다 커져서 원본을 그대로 두었습니다. 어느 쪽이든 업로드됩니다.",
+    de: "In jeder versuchten Qualität kam es schwerer heraus als das Original, \
+         also blieb das Original unverändert. Hochladen lässt es sich so oder so.",
+    es: "En todas las calidades probadas salió más pesado que el original, así que \
+         se conservó tal cual. Se puede subir igualmente.",
+    fr: "À chaque qualité essayée, le résultat était plus lourd que l'original ; \
+         celui-ci a donc été conservé tel quel. Il se téléverse dans tous les cas.",
+    hr: "U svakoj isprobanoj kvaliteti ispao je teži od izvornika, pa je izvornik \
+         zadržan takav kakav jest. Može se poslati i ovako.",
+    hu: "Minden kipróbált minőségben nehezebb lett az eredetinél, ezért az eredeti \
+         maradt változatlanul. Így is feltölthető.",
+    id: "Di setiap kualitas yang dicoba hasilnya lebih berat dari aslinya, jadi \
+         aslinya dibiarkan apa adanya. Tetap bisa diunggah.",
+    nl: "Bij elke geprobeerde kwaliteit kwam het zwaarder uit dan het origineel, \
+         dus is het origineel ongewijzigd gebleven. Uploaden kan hoe dan ook.",
+    pt: "Em todas as qualidades testadas ficou mais pesado que o original, por isso \
+         o original foi mantido como está. Dá para enviar de qualquer forma.",
+    ru: "На каждом качестве результат выходил тяжелее оригинала, поэтому оригинал \
+         оставлен как есть. Загрузить его можно и так.",
 };
 
 /// Shown while the search throws away one quality and starts another.
