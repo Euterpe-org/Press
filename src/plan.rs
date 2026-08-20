@@ -1,0 +1,195 @@
+//! What has to change about this file, and how much it is allowed to cost.
+//!
+//! A port of `Euterpe.Web/scripts/video_transcode.py`'s `plan()` and its ffmpeg
+//! recipe. The reason to mirror it rather than invent one: a video standardised
+//! by Press should be the SAME FILE the server's periodic round would have
+//! produced, so that round has nothing left to do. Every chart it does not have
+//! to touch is one that never carries a `video_holders_stale` debt.
+//!
+//! # The two populations, treated oppositely
+//!
+//! Four constraints are mandatory -- no audio track, inside the pixel limit,
+//! inside the frame-rate limit, no longer than its music. **AV1 is not**
+//! (K's ruling, 2026-08-18). That splits every file in two:
+//!
+//! * **Re-encoding is FORCED** by a resolution or frame rate outside the gate --
+//!   neither can be changed by copying streams -- or by a codec the gate refuses
+//!   outright (VP9, mp4v). AV1 is the only way out and the result is kept
+//!   whatever it weighs, because the alternative is a file that stays illegal.
+//! * **Re-encoding is OFFERED** when the file already conforms and only its
+//!   audio or its tail is wrong. A stream copy fixes both exactly and for free,
+//!   so AV1 is encoded anyway and kept ONLY if it comes back smaller.
+//!
+//! CRF is a quality target, not a size target, so a source already compressed
+//! below it comes back BIGGER. Measured across eight real chart videos the
+//! results ranged from 13% to 140% of the original, and source bitrate did not
+//! predict which. That is why the size test belongs to the codec preference
+//! alone and never to the constraints.
+//!
+//! An already-AV1 source is never re-encoded at all: a second generation of loss
+//! measured ~190% and buys nothing.
+
+use crate::gate::{Facts, limits};
+
+/// The quality dial, and the only knob worth touching. Chosen by K against
+/// footage that is dimmed, scrimmed and playing behind gameplay.
+pub const CRF: u32 = 32;
+
+/// Speed/efficiency balance. ~3.5x realtime on a desktop; measured 8.7x on a
+/// 24-core machine for 720p and 1.9x for 1080p.
+pub const PRESET: u32 = 6;
+
+/// A file over the size limit has to fit, so the quality dial walks down until
+/// it does. Bounded, and the value used is worth showing the user: anything that
+/// only fits at 44 has visibly paid for it.
+pub const CRF_ESCALATION: [u32; 2] = [38, 44];
+
+/// A stream copy rewrites no picture, so its output can only grow by container
+/// overhead -- `+faststart` moving the moov to the front measured 17 KB on a
+/// 6 MB file. Past this, something other than overhead happened.
+pub const LOSSLESS_GROWTH_MARGIN: f64 = 1.02;
+
+/// A trim lands on a packet boundary, so it can sit a fraction of a second past
+/// the mark. A second of overshoot is not a failure.
+pub const TRIM_TOLERANCE: f64 = 1.0;
+
+/// The shape this particular video has to end up in.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Target {
+    /// `None` keeps the source's frame size.
+    pub size: Option<(u32, u32)>,
+    /// `None` keeps the source's frame rate.
+    pub fps: Option<u32>,
+    /// `None` keeps the source's length.
+    pub trim_to: Option<f64>,
+    /// Geometry, frame rate, or a codec the gate refuses: a stream copy cannot
+    /// fix any of them.
+    pub must_reencode: bool,
+    /// Conforms already, so AV1 has to earn its place on size.
+    pub may_try_av1: bool,
+}
+
+impl Target {
+    pub fn is_noop(&self) -> bool {
+        self.size.is_none() && self.fps.is_none() && self.trim_to.is_none() && !self.must_reencode
+    }
+}
+
+/// What has to change, and whether re-encoding is forced or merely offered.
+///
+/// `allowance` is how long this video may run -- the song's own length plus
+/// `limits::OVERRUN_ALLOWANCE_SECONDS`. `None` means no opinion, and the video
+/// keeps its own length: **the gate does not judge duration and Press must never
+/// imply that it does.**
+pub fn plan(facts: &Facts, allowance: Option<f64>) -> Target {
+    let pixels = u64::from(facts.width) * u64::from(facts.height);
+    let size = (pixels > limits::MAX_PIXELS).then(|| {
+        let scale = (limits::MAX_PIXELS as f64 / pixels as f64).sqrt();
+        // Down to EVEN dimensions: yuv420p subsamples by two, and rounding DOWN
+        // keeps the result inside the budget rather than a pixel over it.
+        (even_floor(facts.width, scale), even_floor(facts.height, scale))
+    });
+
+    let fps = crate::gate::probe::over_fps_limit(facts.fps).then_some(limits::MAX_FPS);
+    let trim_to = allowance.filter(|a| facts.duration > *a);
+
+    let must_reencode = size.is_some() || fps.is_some() || !limits::codec_allowed(facts.codec);
+    let may_try_av1 = !must_reencode && facts.codec != Some("av1");
+
+    Target { size, fps, trim_to, must_reencode, may_try_av1 }
+}
+
+/// Python's `max(2, int(x * scale) // 2 * 2)`: truncate toward zero, then round
+/// down to even, then refuse to vanish.
+fn even_floor(value: u32, scale: f64) -> u32 {
+    let scaled = (f64::from(value) * scale) as u32;
+    (scaled / 2 * 2).max(2)
+}
+
+/// Which encoder a candidate is asking for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Encode {
+    /// Stream copy: audio and tail fixed, picture untouched, exact and free.
+    Copy,
+    /// Re-encode to AV1 at this CRF.
+    Av1(u32),
+}
+
+/// The ffmpeg argument list, byte for byte what the server's round runs.
+///
+/// **There is no `-ss` in this function and there must never be one.** The trim
+/// cuts the TAIL and never the opening -- K's red line -- and `-t` with no `-ss`
+/// is what makes that a property of the command rather than a convention someone
+/// has to remember. `tests/plan.rs` asserts its absence.
+pub fn command(input: &str, output: &str, target: &Target, encode: Encode) -> Vec<String> {
+    let mut cmd: Vec<String> = ["ffmpeg", "-y", "-loglevel", "error", "-i", input]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+
+    if let Some(trim_to) = target.trim_to {
+        cmd.push("-t".to_owned());
+        cmd.push(format!("{trim_to:.3}"));
+    }
+
+    match encode {
+        Encode::Copy => {
+            cmd.push("-c".to_owned());
+            cmd.push("copy".to_owned());
+        }
+        Encode::Av1(crf) => {
+            let mut filters = Vec::new();
+            if let Some((w, h)) = target.size {
+                filters.push(format!("scale={w}:{h}:flags=lanczos"));
+            }
+            if let Some(fps) = target.fps {
+                filters.push(format!("fps={fps}"));
+            }
+            if !filters.is_empty() {
+                cmd.push("-vf".to_owned());
+                cmd.push(filters.join(","));
+            }
+            for arg in ["-c:v", "libsvtav1", "-crf"] {
+                cmd.push(arg.to_owned());
+            }
+            cmd.push(crf.to_string());
+            cmd.push("-preset".to_owned());
+            cmd.push(PRESET.to_string());
+            cmd.push("-pix_fmt".to_owned());
+            cmd.push("yuv420p".to_owned());
+        }
+    }
+
+    // `-an`: the video's own audio is never played -- the game plays music.ogg
+    // and the mod sets audioOutputMode = None -- so it is dropped, not
+    // re-encoded. `+faststart` puts the moov box first; costs nothing.
+    for arg in ["-an", "-movflags", "+faststart", output] {
+        cmd.push(arg.to_owned());
+    }
+    cmd
+}
+
+/// Progress reporting, spliced in by the runner rather than baked into
+/// [`command`].
+///
+/// These flags are output-neutral -- they change what ffmpeg SAYS, never what it
+/// writes -- and keeping them out of `command()` is what lets that function stay
+/// comparable, argument for argument, with the recipe the server runs.
+///
+/// `-progress pipe:1` writes `key=value` lines to stdout (`out_time_us`,
+/// `total_size`, `speed`, and `progress=continue|end`); `-nostats` silences the
+/// human-readable line that would otherwise interleave with them on stderr.
+pub const PROGRESS_FLAGS: [&str; 3] = ["-progress", "pipe:1", "-nostats"];
+
+/// Noise on stderr that is not a diagnostic.
+///
+/// SVT-AV1 prints a banner and its whole configuration through its own logger,
+/// which `-loglevel error` does not reach -- those lines are emitted by the
+/// encoder library, not by ffmpeg. The server's script sends stderr to
+/// /dev/null and never notices; Press keeps stderr in order to explain a real
+/// failure, so it has to drop these itself or a genuine error arrives buried
+/// under twenty lines of configuration.
+pub fn is_encoder_noise(line: &str) -> bool {
+    let line = line.trim_start();
+    line.starts_with("Svt[info]:") || line.starts_with("Svt[warn]:")
+}

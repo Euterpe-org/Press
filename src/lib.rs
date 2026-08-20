@@ -9,3 +9,4 @@
 //! (`tests/gate.rs`) instead of against a screenshot.
 
 pub mod gate;
+pub mod plan;
