@@ -1,0 +1,6 @@
+# Pinned so a release is reproducible and so CI and a developer's machine agree
+# about what a warning is. rustup installs this on first use.
+[toolchain]
+channel = "1.97.1"
+components = ["clippy", "rustfmt"]
+targets = ["x86_64-pc-windows-msvc"]

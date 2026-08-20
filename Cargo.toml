@@ -2,6 +2,21 @@
 name = "euterpe-press"
 version = "0.1.0"
 edition = "2024"
+description = "Turns a background video into one euterpe-org.com will accept"
+publish = false
+
+# Size over speed, deliberately: this ships as ONE file that a charter
+# downloads, and the only CPU-bound work Press does itself is walking an MP4's
+# box tree — everything expensive happens inside the encoder it carries.
+#
+# Unwinding stays ON. `panic = "abort"` would shave the binary, but a tool that
+# vanishes without a word is worse than a larger one: a panic has to remain
+# catchable so it can be shown. Same reasoning as Euterpe.Doctor's profile.
+[profile.release]
+opt-level = "s"
+lto = "fat"
+codegen-units = 1
+strip = true
 
 [dependencies]
 eframe = "0.36.1"

@@ -7,16 +7,14 @@
 //!
 //! # The enum only lists languages that are actually finished
 //!
-//! Euterpe.App and Doctor ship fourteen. Press starts with three, and that is a
-//! deliberate use of the same mechanism rather than a shortfall in it: adding
-//! `Lang::Ja` here makes the compiler list every string that has no Japanese
-//! yet, and the build stays red until they all do. So a locale is either
-//! complete or absent, and there is no state in which a charter is shown half a
-//! translated interface.
+//! Fourteen, the same set as Euterpe.App and Euterpe.Doctor, so terminology
+//! cannot drift between products a charter uses in the same afternoon -- and so
+//! that somebody running the App in Korean is not handed an English Press.
 //!
-//! Euterpe.App works the same way by convention -- neutral plus zh-Hans and
-//! zh-Hant during development, the rest translated in one pass at the end.
-//! Here the convention is enforced.
+//! Adding a locale means adding a field, which makes the compiler name every
+//! string that does not have it yet and keeps the build red until they all do.
+//! A locale is therefore complete or absent, and there is no state in which a
+//! charter reads half a translated interface.
 //!
 //! # Press says what it will DO, not what the charter must do
 //!
@@ -36,12 +34,38 @@ pub enum Lang {
     En,
     ZhHans,
     ZhHant,
+    Ja,
+    Ko,
+    De,
+    Es,
+    Fr,
+    Hr,
+    Hu,
+    Id,
+    Nl,
+    Pt,
+    Ru,
 }
 
 impl Lang {
-    pub const ALL: [Self; 3] = [Self::En, Self::ZhHans, Self::ZhHant];
+    pub const ALL: [Self; 14] = [
+        Self::En,
+        Self::ZhHans,
+        Self::ZhHant,
+        Self::Ja,
+        Self::Ko,
+        Self::De,
+        Self::Es,
+        Self::Fr,
+        Self::Hr,
+        Self::Hu,
+        Self::Id,
+        Self::Nl,
+        Self::Pt,
+        Self::Ru,
+    ];
 
-    /// The OS language, falling back to English for anything not carried yet.
+    /// The OS language, falling back to English for anything not carried.
     pub fn from_system() -> Self {
         let Some(tag) = system_locale() else {
             return Self::En;
@@ -58,7 +82,22 @@ impl Lang {
                 Self::ZhHans
             };
         }
-        Self::En
+
+        match tag.split(['-', '_']).next().unwrap_or_default() {
+            "ja" => Self::Ja,
+            "ko" => Self::Ko,
+            "de" => Self::De,
+            "es" => Self::Es,
+            "fr" => Self::Fr,
+            "hr" => Self::Hr,
+            "hu" => Self::Hu,
+            // Windows still reports the retired ISO code for Indonesian.
+            "id" | "in" => Self::Id,
+            "nl" => Self::Nl,
+            "pt" => Self::Pt,
+            "ru" => Self::Ru,
+            _ => Self::En,
+        }
     }
 
     pub const fn endonym(self) -> &'static str {
@@ -66,6 +105,17 @@ impl Lang {
             Self::En => "English",
             Self::ZhHans => "简体中文",
             Self::ZhHant => "繁體中文",
+            Self::Ja => "日本語",
+            Self::Ko => "한국어",
+            Self::De => "Deutsch",
+            Self::Es => "Español",
+            Self::Fr => "Français",
+            Self::Hr => "Hrvatski",
+            Self::Hu => "Magyar",
+            Self::Id => "Bahasa Indonesia",
+            Self::Nl => "Nederlands",
+            Self::Pt => "Português",
+            Self::Ru => "Русский",
         }
     }
 }
@@ -91,6 +141,17 @@ pub struct Text {
     pub en: &'static str,
     pub zh_hans: &'static str,
     pub zh_hant: &'static str,
+    pub ja: &'static str,
+    pub ko: &'static str,
+    pub de: &'static str,
+    pub es: &'static str,
+    pub fr: &'static str,
+    pub hr: &'static str,
+    pub hu: &'static str,
+    pub id: &'static str,
+    pub nl: &'static str,
+    pub pt: &'static str,
+    pub ru: &'static str,
 }
 
 impl Text {
@@ -99,6 +160,17 @@ impl Text {
             Lang::En => self.en,
             Lang::ZhHans => self.zh_hans,
             Lang::ZhHant => self.zh_hant,
+            Lang::Ja => self.ja,
+            Lang::Ko => self.ko,
+            Lang::De => self.de,
+            Lang::Es => self.es,
+            Lang::Fr => self.fr,
+            Lang::Hr => self.hr,
+            Lang::Hu => self.hu,
+            Lang::Id => self.id,
+            Lang::Nl => self.nl,
+            Lang::Pt => self.pt,
+            Lang::Ru => self.ru,
         }
     }
 }

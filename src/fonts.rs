@@ -52,12 +52,18 @@ type Script = &'static [&'static str];
 
 const SIMPLIFIED: Script = &["msyh.ttc", "simhei.ttf", "simsun.ttc"];
 const TRADITIONAL: Script = &["msjh.ttc", "mingliu.ttc"];
+const JAPANESE: Script = &["YuGothM.ttc", "meiryo.ttc", "msgothic.ttc"];
+const KOREAN: Script = &["malgun.ttf", "gulim.ttc"];
+/// Latin and Cyrillic both. Segoe UI covers Russian, so the eleven European
+/// locales and English need nothing further.
 const LATIN: Script = &["segoeui.ttf"];
 
-fn script_order(lang: Lang) -> [Script; 2] {
+fn script_order(lang: Lang) -> [Script; 4] {
     match lang {
-        Lang::ZhHant => [TRADITIONAL, SIMPLIFIED],
-        _ => [SIMPLIFIED, TRADITIONAL],
+        Lang::ZhHant => [TRADITIONAL, SIMPLIFIED, JAPANESE, KOREAN],
+        Lang::Ja => [JAPANESE, SIMPLIFIED, TRADITIONAL, KOREAN],
+        Lang::Ko => [KOREAN, SIMPLIFIED, TRADITIONAL, JAPANESE],
+        _ => [SIMPLIFIED, TRADITIONAL, JAPANESE, KOREAN],
     }
 }
 
