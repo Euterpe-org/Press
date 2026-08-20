@@ -14,10 +14,31 @@
 //! through the same [`gate`] that judged the input, and a tool that can hand
 //! back a file its own gate rejects is worse than one that does not check at
 //! all.
+//!
+//! # There are no options here, deliberately
+//!
+//! Resolution, frame rate, codec and size are not the charter's problem. They
+//! are the server's rules, they have exactly one correct resolution each, and a
+//! checkbox asking a musician whether to downscale to 2560x1440 is a question
+//! with a right answer being asked of someone who has no way to know it. All
+//! four are fixed automatically and reported afterwards, never offered.
+//!
+//! The only thing the charter decides is the trim -- because only they know what
+//! their video is supposed to show -- and whether to wait for the AV1
+//! comparison. Anything else that grows a switch here is a mistake.
+//!
+//! # Cancelling means different things to the two populations
+//!
+//! For a file whose only problem is an audio track or a tail, the stream copy is
+//! ALREADY a fully compliant result: cancelling costs nothing but the chance of
+//! a smaller file. For a file that must be re-encoded, the encode IS the fix and
+//! there is no compliant copy to fall back on -- cancelling yields
+//! [`Outcome::Cancelled`] and nothing on disk. The window has to word the button
+//! accordingly; it is not the same button.
 
 use std::path::{Path, PathBuf};
 
-use crate::ffmpeg::{Ffmpeg, Progress};
+use crate::ffmpeg::{Cancel, Ffmpeg, Progress, Ran};
 use crate::gate::{self, Facts};
 use crate::plan::{self, Encode, Target};
 
@@ -60,6 +81,10 @@ pub struct Produced {
     pub scaled_to: Option<(u32, u32)>,
     pub frame_rate_clamped: Option<u32>,
     pub trimmed_to: Option<f64>,
+    /// The AV1 comparison was stopped on request, so this result is the exact
+    /// stream copy and might not be the smallest one available. Worth saying:
+    /// the file is correct either way, but the charter chose not to find out.
+    pub av1_cancelled: bool,
 }
 
 #[derive(Debug)]
@@ -68,6 +93,12 @@ pub enum Outcome {
     /// over-run. The only case where Press writes nothing at all.
     AlreadyStandard,
     Produced(Box<Produced>),
+    /// Stopped on request with nothing to show for it.
+    ///
+    /// Only reachable when a re-encode was FORCED. Where a stream copy was
+    /// possible it has already produced a compliant file, and cancelling the
+    /// AV1 comparison ships that instead.
+    Cancelled,
     /// Still non-standard, and a person has to look. Never a silent skip.
     Failed(String),
 }
@@ -78,6 +109,7 @@ pub fn standardise(
     source: &Path,
     output: &Path,
     allowance: Option<f64>,
+    cancel: &Cancel,
     mut on_step: impl FnMut(Step),
 ) -> Outcome {
     on_step(Step::Reading);
@@ -109,14 +141,20 @@ pub fn standardise(
     // Only possible when nothing about the geometry has to move.
     if !target.must_reencode {
         let cmd = plan::command(&source_str, &copy_path.to_string_lossy(), &target, Encode::Copy);
-        let mut progress = None;
-        if let Err(error) = ffmpeg.run(&cmd, Some(before.duration), |p| {
-            progress = Some(p);
+        match ffmpeg.run(&cmd, Some(before.duration), cancel, |p| {
             on_step(Step::Copying(Some(p)));
         }) {
-            let _ = progress;
-            let _ = std::fs::remove_file(&copy_path);
-            return Outcome::Failed(format!("the stream copy failed: {error}"));
+            Err(error) => {
+                let _ = std::fs::remove_file(&copy_path);
+                return Outcome::Failed(format!("the stream copy failed: {error}"));
+            }
+            // A partial MP4 left on disk is worse than none: it looks like a
+            // result. The copy takes a fraction of a second, so this is rare.
+            Ok(Ran::Cancelled) => {
+                let _ = std::fs::remove_file(&copy_path);
+                return Outcome::Cancelled;
+            }
+            Ok(Ran::ToCompletion) => {}
         }
 
         on_step(Step::Verifying);
@@ -145,6 +183,7 @@ pub fn standardise(
 
     // ── the AV1 candidate ────────────────────────────────────────────────
     let mut av1_bytes = None;
+    let mut av1_cancelled = false;
     if target.must_reencode || target.may_try_av1 {
         let ladder: Vec<u32> = std::iter::once(plan::CRF)
             .chain(plan::CRF_ESCALATION)
@@ -152,13 +191,28 @@ pub fn standardise(
         let mut last_error = None;
 
         for (attempt, crf) in ladder.iter().copied().enumerate() {
+            // Also checked before each rung: a cancel that lands during
+            // verification must not be answered by starting another encode.
+            if cancel.requested() {
+                av1_cancelled = true;
+                break;
+            }
+
             let cmd =
                 plan::command(&source_str, &av1_path.to_string_lossy(), &target, Encode::Av1(crf));
-            if let Err(error) = ffmpeg.run(&cmd, Some(target.trim_to.unwrap_or(before.duration)), |p| {
+            let ran = ffmpeg.run(&cmd, Some(target.trim_to.unwrap_or(before.duration)), cancel, |p| {
                 on_step(Step::Encoding { crf, attempt: attempt + 1, progress: Some(p) });
-            }) {
-                last_error = Some(error);
-                break;
+            });
+            match ran {
+                Err(error) => {
+                    last_error = Some(error);
+                    break;
+                }
+                Ok(Ran::Cancelled) => {
+                    av1_cancelled = true;
+                    break;
+                }
+                Ok(Ran::ToCompletion) => {}
             }
 
             on_step(Step::Verifying);
@@ -192,6 +246,9 @@ pub fn standardise(
             break;
         }
 
+        if av1_cancelled {
+            let _ = std::fs::remove_file(&av1_path);
+        }
         if let Some(error) = last_error {
             let _ = std::fs::remove_file(&av1_path);
             if target.must_reencode {
@@ -199,6 +256,15 @@ pub fn standardise(
                 return Outcome::Failed(format!("the encode failed: {error}"));
             }
         }
+    }
+
+    // A forced re-encode has no compliant copy behind it: the encode IS the
+    // fix, so stopping it leaves nothing to ship. Where a copy exists it is
+    // already correct, and cancelling only forfeits the chance of a smaller
+    // file -- so that path falls through and ships it.
+    if av1_cancelled && target.must_reencode {
+        let _ = std::fs::remove_file(&copy_path);
+        return Outcome::Cancelled;
     }
 
     // ── pick ─────────────────────────────────────────────────────────────
@@ -240,6 +306,7 @@ pub fn standardise(
         scaled_to: target.size,
         frame_rate_clamped: target.fps,
         trimmed_to: target.trim_to,
+        av1_cancelled,
     }))
 }
 

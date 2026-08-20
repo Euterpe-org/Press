@@ -20,8 +20,41 @@
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::plan;
+
+/// A request to stop, shared between the window and the worker.
+///
+/// One token covers a whole run, so cancelling during the encode also prevents
+/// the next rung of the CRF ladder from starting. Cloning shares the flag.
+#[derive(Debug, Clone, Default)]
+pub struct Cancel(Arc<AtomicBool>);
+
+impl Cancel {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn request(&self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+
+    pub fn requested(&self) -> bool {
+        self.0.load(Ordering::Relaxed)
+    }
+}
+
+/// How a run ended, short of failing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ran {
+    ToCompletion,
+    /// Stopped on request. The output is a partial file and the caller deletes
+    /// it -- a truncated MP4 left on disk is worse than none, because it looks
+    /// like a result.
+    Cancelled,
+}
 
 /// How far along an encode is.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -108,8 +141,9 @@ impl Ffmpeg {
         &self,
         args: &[String],
         total_seconds: Option<f64>,
+        cancel: &Cancel,
         mut on_progress: impl FnMut(Progress),
-    ) -> Result<(), Error> {
+    ) -> Result<Ran, Error> {
         // `args[0]` is the program NAME, not an argument. It is there because
         // the recipe is compared argument for argument against the list the
         // server hands to `subprocess.run`, where argv[0] is the program -- so
@@ -152,7 +186,16 @@ impl Ffmpeg {
 
         let stdout = child.stdout.take().expect("stdout was piped");
         let mut sample = ProgressSample::default();
+        let mut stopped = false;
         for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            // Checked per line rather than per second: `-progress` emits a block
+            // roughly twice a second, which is as responsive as a cancel button
+            // needs to be, and it costs an atomic load.
+            if cancel.requested() {
+                let _ = child.kill();
+                stopped = true;
+                break;
+            }
             if let Some(progress) = sample.absorb(&line, total_seconds) {
                 on_progress(progress);
             }
@@ -161,8 +204,13 @@ impl Ffmpeg {
         let status = child.wait().map_err(Error::NotRunnable)?;
         let stderr = collector.join().unwrap_or_default();
 
+        // A killed process exits non-zero and complains. That is not a failure
+        // to report -- it is what being cancelled looks like from the outside.
+        if stopped || cancel.requested() {
+            return Ok(Ran::Cancelled);
+        }
         if status.success() {
-            Ok(())
+            Ok(Ran::ToCompletion)
         } else {
             Err(Error::Refused(Failure { status: status.code(), stderr }))
         }

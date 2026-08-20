@@ -70,8 +70,12 @@ fn repair(path: &Path) -> bool {
     // produces.
     let ffmpeg = Ffmpeg::on_path();
 
+    // The window owns a real one and wires it to a button. Nothing cancels a
+    // command-line run, so this token is never set.
+    let cancel = euterpe_press::ffmpeg::Cancel::new();
+
     let mut last = String::new();
-    let outcome = standardise::standardise(&ffmpeg, path, &output, None, |step| {
+    let outcome = standardise::standardise(&ffmpeg, path, &output, None, &cancel, |step| {
         let line = match step {
             Step::Reading => "reading".to_owned(),
             Step::Copying(p) => format!("stream copy {}", percent(p.and_then(|p| p.fraction))),
@@ -94,6 +98,10 @@ fn repair(path: &Path) -> bool {
         Outcome::AlreadyStandard => {
             println!("{:<32} already standard, nothing written", "");
             false
+        }
+        Outcome::Cancelled => {
+            println!("{:<32} cancelled, nothing written", "");
+            true
         }
         Outcome::Failed(reason) => {
             println!("FAILED: {reason}");
@@ -121,6 +129,9 @@ fn repair(path: &Path) -> bool {
             }
             if let Some(trim) = produced.trimmed_to {
                 did.push(format!("trimmed to {trim:.0}s"));
+            }
+            if produced.av1_cancelled {
+                did.push("av1 comparison cancelled".to_owned());
             }
             println!(
                 "{:>7} KB -> {:>4.0}%  {}",
