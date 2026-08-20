@@ -271,3 +271,21 @@ pub fn heading(ui: &mut egui::Ui, text: &str, colour: Color32) {
 pub fn muted(ui: &mut egui::Ui, text: &str) {
     ui.label(egui::RichText::new(text).size(size::SMALL).color(INK_MUTED));
 }
+
+/// A file path, in full.
+///
+/// Monospaced and wrapping, because a path is read by SCANNING it rather than
+/// by reading it as prose: separators and repeated folder names line up, and the
+/// part that differs between two similar paths is what the eye is looking for.
+/// Selectable, so it can be copied out.
+pub fn path(ui: &mut egui::Ui, full: &str) {
+    ui.add(
+        egui::Label::new(
+            egui::RichText::new(full)
+                .monospace()
+                .size(size::SMALL)
+                .color(INK_MUTED),
+        )
+        .wrap(),
+    );
+}

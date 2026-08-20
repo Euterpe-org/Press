@@ -51,8 +51,13 @@ use crate::timeline::Change;
 use crate::{fonts, theme};
 
 /// Height of the action bar's contents. Reserved before the body is measured.
+///
+/// `TALL` fits a primary button (44 plus its stroke); `SHORT` fits a quiet one,
+/// which is a line of body text inside `button_padding.y` twice. 34 was the
+/// guess, and it was two pixels short -- the buttons hung out of the bar and got
+/// clipped by the region that contains them.
 const ACTION_TALL: f32 = 46.0;
-const ACTION_SHORT: f32 = 34.0;
+const ACTION_SHORT: f32 = 38.0;
 
 /// The window's own padding, one value so the body's width is derivable.
 pub const MARGIN_X: f32 = 24.0;
@@ -276,12 +281,13 @@ impl Press {
             Stage::Working(working) => {
                 if working.forced {
                     // The abandon button carries a sentence under it.
-                    ACTION_SHORT + space::TIGHT + 18.0
+                    ACTION_SHORT + space::TIGHT + LINE_H
                 } else {
                     ACTION_SHORT
                 }
             }
-            Stage::Finished(_) => ACTION_SHORT,
+            // Show-in-folder is a primary button, so the bar is the tall one.
+            Stage::Finished(_) => ACTION_TALL,
         }
     }
 
@@ -337,15 +343,21 @@ impl Press {
                 };
                 let mut again = false;
                 let mut reveal_it = None;
-                ui.vertical_centered(|ui| {
-                    ui.horizontal(|ui| {
-                        if let Some(path) = produced
-                            && theme::quiet(ui, text::SHOW_IN_FOLDER.get(lang)).clicked()
-                        {
-                            reveal_it = Some(path);
-                        }
-                        again = theme::quiet(ui, text::ANOTHER.get(lang)).clicked();
-                    });
+                // A row, centred properly. `vertical_centered` centres a single
+                // widget but not a `horizontal` inside it -- the row claims the
+                // full width and its contents start hard against the left edge,
+                // which is where these two buttons were sitting.
+                centred_row(ui, "finished-actions", |ui| {
+                    // Opening the folder is what the charter does NEXT: the file
+                    // exists to be uploaded. So it is the loud one, and it also
+                    // gives the emptiest screen in the window something to look
+                    // at besides two grey pills in a corner.
+                    if let Some(path) = produced
+                        && theme::primary(ui, text::SHOW_IN_FOLDER.get(lang)).clicked()
+                    {
+                        reveal_it = Some(path);
+                    }
+                    again = theme::quiet(ui, text::ANOTHER.get(lang)).clicked();
                 });
                 if let Some(path) = reveal_it {
                     reveal(&path);
@@ -508,7 +520,7 @@ impl Press {
     }
 
     fn begin(&mut self) {
-        let Stage::Loaded(loaded) = &mut self.stage else {
+        let Stage::Loaded(loaded) = &self.stage else {
             return;
         };
         let Some(ffmpeg) = self.ffmpeg.clone() else {
@@ -517,10 +529,42 @@ impl Press {
         let Some(facts) = loaded.facts.clone() else {
             return;
         };
-
+        // Copied out before anything else, so the borrow on the stage ends here
+        // and the run can replace it.
         let source = loaded.path.clone();
-        let output = source.with_file_name("video.mp4");
+        let source_bytes = loaded.source_bytes;
         let trim = loaded.trim;
+
+        // WHERE IT GOES IS THE CHARTER'S CHOICE. Press used to write `video.mp4`
+        // beside the source without asking, which silently destroyed any file
+        // already sitting there -- including, on a second run, its own previous
+        // result. The system dialog handles the overwrite question itself, in
+        // the charter's own Windows language, and it is the one prompt they
+        // already trust.
+        let Some(output) = rfd::FileDialog::new()
+            .set_title(text::SAVE_TITLE.get(self.lang))
+            .set_directory(source.parent().unwrap_or(Path::new(".")))
+            .set_file_name("video.mp4")
+            .add_filter("MP4", &["mp4"])
+            .save_file()
+        else {
+            // Cancelled the dialog: nothing has happened, and the file stays
+            // loaded exactly as it was.
+            return;
+        };
+        // ffmpeg cannot read and write the same file, and a charter who picks
+        // the source as the destination has asked for their original to be
+        // destroyed by a process that would fail halfway through doing it.
+        if same_file(&source, &output) {
+            self.stage = Stage::Finished(Box::new(Finished {
+                source_bytes,
+                outcome: Outcome::Failed(
+                    "the result cannot be written over the file being read".to_owned(),
+                ),
+            }));
+            return;
+        }
+
         let forced = trim.moves_the_opening()
             || crate::plan::plan(&facts, trim.allowance(facts.duration)).must_reencode;
         let cancel = Cancel::new();
@@ -541,12 +585,24 @@ impl Press {
 
         self.stage = Stage::Working(Box::new(Working {
             path: source,
-            source_bytes: loaded.source_bytes,
+            source_bytes,
             cancel,
             inbox,
             step: Step::Reading,
             forced,
         }));
+    }
+}
+
+/// Whether two paths name the same file on disk.
+///
+/// Compared after canonicalising, because `.\video.mp4` and an absolute path to
+/// it are the same file and a string comparison says otherwise. A path that
+/// cannot be canonicalised does not exist yet, which answers the question.
+fn same_file(a: &Path, b: &Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
     }
 }
 
@@ -732,12 +788,12 @@ impl Press {
             }
             Step::Verifying => (text::STEP_VERIFYING.get(lang).to_owned(), None),
         };
-        let name = file_name(&working.path);
+        let name = working.path.to_string_lossy().into_owned();
 
         centred(ui, "working", |ui| {
             theme::card(ui, |ui| {
                 ui.set_width(ui.available_width());
-                theme::muted(ui, &name);
+                theme::path(ui, &name);
                 ui.add_space(space::ROW);
                 ui.label(egui::RichText::new(label).size(theme::size::TITLE));
                 ui.add_space(space::ROW);
@@ -774,6 +830,13 @@ impl Press {
                                 .replace("{before}", &megabytes(source_bytes))
                                 .replace("{after}", &megabytes(produced.bytes)),
                         );
+                        // Where it went, in full. The next thing the charter
+                        // does is find this file and upload it, so "it worked"
+                        // without an address is half an answer.
+                        ui.add_space(space::ROW);
+                        theme::muted(ui, text::SAVED_TO.get(lang));
+                        ui.add_space(2.0);
+                        theme::path(ui, &produced.path.to_string_lossy());
                         for line in outcome_notes(produced, lang) {
                             ui.add_space(space::TIGHT);
                             theme::muted(ui, &line);
@@ -785,10 +848,31 @@ impl Press {
                     Outcome::Cancelled => {
                         theme::heading(ui, text::CANCELLED.get(lang), theme::INK_MUTED);
                     }
+                    // Amber, not red: nothing went wrong, the video is simply
+                    // longer than 80 MB of anything watchable. Red would say
+                    // Press broke, and it did not.
+                    Outcome::StillTooLarge { smallest } => {
+                        theme::heading(ui, text::STILL_TOO_LARGE.get(lang), theme::NOTICE);
+                        ui.add_space(space::TIGHT);
+                        ui.add(egui::Label::new(
+                            egui::RichText::new(
+                                text::STILL_TOO_LARGE_DETAIL
+                                    .get(lang)
+                                    .replace("{size}", &smallest.div_ceil(1024 * 1024).to_string())
+                                    .replace(
+                                        "{limit}",
+                                        &limits::MAX_BYTES.div_ceil(1024 * 1024).to_string(),
+                                    ),
+                            )
+                            .size(theme::size::SMALL),
+                        ));
+                    }
                     Outcome::Failed(reason) => {
                         theme::heading(ui, text::FAILED.get(lang), theme::ALARM);
                         ui.add_space(space::TIGHT);
-                        ui.label(egui::RichText::new(reason).size(theme::size::SMALL));
+                        ui.add(egui::Label::new(
+                            egui::RichText::new(reason).size(theme::size::SMALL),
+                        ));
                     }
                 }
             });
@@ -818,6 +902,50 @@ fn centred(ui: &mut egui::Ui, id: &str, add: impl FnOnce(&mut egui::Ui)) {
         ui.allocate_ui(egui::vec2(width, ui.available_height()), add);
         measured = ui.cursor().top() - start;
     });
+
+    if (measured - known).abs() > 0.5 {
+        ui.data_mut(|d| d.insert_temp(id, measured));
+        ui.ctx().request_repaint();
+    }
+}
+
+/// A horizontal row of controls, centred on the width it actually takes.
+///
+/// egui has no way to do this directly: `vertical_centered` centres a single
+/// widget, but a `horizontal` layout placed inside it claims the whole width and
+/// lays its contents out from the left edge, so the row ends up in the corner.
+/// So the width is measured after drawing and remembered, the same trick and for
+/// the same reason as [`centred`] on the other axis.
+fn centred_row(ui: &mut egui::Ui, id: &str, add: impl FnOnce(&mut egui::Ui)) {
+    let id = egui::Id::new(id);
+    let known: f32 = ui.data(|d| d.get_temp(id)).unwrap_or(0.0);
+
+    let full = ui.max_rect();
+    // Before it has ever been measured the row gets the whole width, so the
+    // single frame that exists in that state is merely left-aligned rather than
+    // hanging off one side.
+    let width = if known > 0.0 {
+        known.min(full.width())
+    } else {
+        full.width()
+    };
+    let band = egui::Rect::from_min_size(
+        egui::pos2(full.center().x - width / 2.0, full.top()),
+        egui::vec2(width, full.height()),
+    );
+
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(band));
+    child.horizontal(|ui| add(ui));
+    let used = child.min_rect();
+
+    // Advanced by what the row ACTUALLY took, not by the band it was offered.
+    // Advancing by the band would report a row that fitted whatever its
+    // contents did, which hides exactly the overflow `region`'s assertion
+    // exists to catch -- and did hide it: a bar two pixels too short for its
+    // own buttons passed a test written to find that.
+    ui.advance_cursor_after_rect(used);
+
+    let measured = used.width();
 
     if (measured - known).abs() > 0.5 {
         ui.data_mut(|d| d.insert_temp(id, measured));
@@ -1001,7 +1129,11 @@ fn transport(ui: &mut egui::Ui, lang: Lang, loaded: &mut Loaded) {
 fn verdict_card(ui: &mut egui::Ui, lang: Lang, loaded: &Loaded, tall: f32, no_encoder: bool) {
     let opening = loaded.trim.cut_opening;
     theme::card_of_height(ui, tall, |ui| {
-        theme::muted(ui, &file_name(&loaded.path));
+        // The WHOLE path, wrapped. A charter with three exports of the same
+        // scene in three folders cannot tell them apart by file name, and the
+        // one thing a formatter must never be vague about is which file it is
+        // looking at.
+        theme::path(ui, &loaded.path.to_string_lossy());
         ui.add_space(space::TIGHT);
 
         let Some(facts) = &loaded.facts else {
@@ -1172,13 +1304,6 @@ fn clock(seconds: f64) -> String {
     format!("{}:{:04.1}", (seconds / 60.0) as u64, seconds % 60.0)
 }
 
-fn file_name(path: &Path) -> String {
-    path.file_name()
-        .unwrap_or(path.as_os_str())
-        .to_string_lossy()
-        .into_owned()
-}
-
 /// Opens the folder with the result selected. Best effort: a tool that cannot
 /// open a file manager has still done its job.
 fn reveal(path: &Path) {
@@ -1257,5 +1382,147 @@ mod tests {
                 }
             }
         });
+    }
+
+    // ── every stage fits the canvas ──────────────────────────────────────
+    //
+    // `region` asserts in debug that what was laid out actually fitted, which
+    // makes it a very good test -- and it had never once run against Working or
+    // Finished, because reaching those states needs an encoder and a real file.
+    // So the action bar's height was a guess nobody had checked, it was two
+    // pixels short, and the buttons hung out of the bottom of the window.
+    //
+    // In-module rather than under `tests/`, because the stages are private and
+    // the alternative is a public constructor that exists only for a test --
+    // scaffolding in the product to make the product testable.
+
+    fn window_input() -> egui::RawInput {
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::pos2(0.0, 0.0),
+                egui::Vec2::from(WINDOW),
+            )),
+            ..Default::default()
+        }
+    }
+
+    /// Runs `frames` frames of the real window and returns what was painted last.
+    fn run(press: &mut Press, ctx: &egui::Context, frames: usize) -> egui::Rect {
+        let mut painted = egui::Rect::NOTHING;
+        for _ in 0..frames {
+            let mut frame = eframe::Frame::_new_kittest();
+            let mut output = ctx.run_ui(window_input(), |ui| {
+                use eframe::App;
+                press.ui(ui, &mut frame);
+            });
+            output.textures_delta.clear();
+            painted = egui::Rect::NOTHING;
+            for shape in &output.shapes {
+                let bounds = shape
+                    .shape
+                    .visual_bounding_rect()
+                    .intersect(shape.clip_rect);
+                if bounds.is_positive() {
+                    painted = painted.union(bounds);
+                }
+            }
+        }
+        painted
+    }
+
+    fn produced(path: &str) -> Outcome {
+        Outcome::Produced(Box::new(crate::standardise::Produced {
+            path: PathBuf::from(path),
+            bytes: 2_300_000,
+            facts: Facts {
+                width: 1920,
+                height: 1080,
+                fps: 30.0,
+                duration: 110.0,
+                codec: Some("av1"),
+                raw_fourcc: "av01".to_owned(),
+                has_audio: false,
+            },
+            treatment: Treatment::Av1 { crf: 32 },
+            audio_dropped: true,
+            scaled_to: Some((1920, 1080)),
+            frame_rate_clamped: Some(30),
+            trimmed_to: Some(90.0),
+            opening_cut: 0.0,
+            av1_cancelled: false,
+        }))
+    }
+
+    /// Every stage, in every language, laid out on the one canvas there is.
+    ///
+    /// The debug assertion inside `region` is what does the judging; this only
+    /// has to put each stage on screen. A long CJK path is used deliberately --
+    /// it is both the widest text and the tallest when wrapped.
+    #[test]
+    fn every_stage_fits_the_window() {
+        let long = "D:\\User\\Videos\\Others\\少女舞乐哭Live-最终版-导出-4k-2026.mp4";
+        let outcomes = [
+            Outcome::AlreadyStandard,
+            produced(long),
+            Outcome::Cancelled,
+            Outcome::StillTooLarge {
+                smallest: 91_000_000,
+            },
+            Outcome::Failed("the stream copy failed: ffmpeg exited with status 1".to_owned()),
+        ];
+
+        for lang in Lang::ALL {
+            let ctx = egui::Context::default();
+            let mut press = Press::new(&ctx, lang, None);
+
+            // Empty.
+            run(&mut press, &ctx, 2);
+
+            // Working, both populations.
+            for forced in [false, true] {
+                let (_tx, inbox) = channel();
+                press.stage = Stage::Working(Box::new(Working {
+                    path: PathBuf::from(long),
+                    source_bytes: 98_000_000,
+                    cancel: Cancel::new(),
+                    inbox,
+                    step: Step::Encoding {
+                        crf: 32,
+                        attempt: 2,
+                        progress: None,
+                    },
+                    forced,
+                }));
+                run(&mut press, &ctx, 2);
+            }
+
+            // Finished, every outcome.
+            for outcome in &outcomes {
+                press.stage = Stage::Finished(Box::new(Finished {
+                    source_bytes: 98_000_000,
+                    outcome: match outcome {
+                        Outcome::Produced(_) => produced(long),
+                        Outcome::AlreadyStandard => Outcome::AlreadyStandard,
+                        Outcome::Cancelled => Outcome::Cancelled,
+                        Outcome::StillTooLarge { smallest } => Outcome::StillTooLarge {
+                            smallest: *smallest,
+                        },
+                        Outcome::Failed(reason) => Outcome::Failed(reason.clone()),
+                    },
+                }));
+                // Three frames: the centring measures itself and settles on the
+                // second, and the third is the one that has to be right.
+                let painted = run(&mut press, &ctx, 3);
+
+                let screen =
+                    egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::Vec2::from(WINDOW));
+                assert!(painted.is_positive(), "nothing was painted at all");
+                assert!(
+                    screen.contains_rect(painted.shrink(0.5)),
+                    "{}: painted {painted:?} outside a window of {screen:?}",
+                    lang.endonym()
+                );
+            }
+        }
     }
 }

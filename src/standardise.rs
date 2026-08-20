@@ -106,8 +106,34 @@ pub enum Outcome {
     /// possible it has already produced a compliant file, and cancelling the
     /// AV1 comparison ships that instead.
     Cancelled,
+    /// Every candidate came out over the size limit, including the bottom rung
+    /// of the quality ladder.
+    ///
+    /// Not a defect and not a bug: a hundred and ten seconds of 1080p, or eight
+    /// minutes of anything, does not fit in 80 MB at a quality worth shipping.
+    /// The remaining lever is the one Press will not pull on its own -- the
+    /// length -- so the charter is told the number and asked to trim.
+    StillTooLarge {
+        /// The smallest thing that was actually produced, in bytes.
+        smallest: u64,
+    },
     /// Still non-standard, and a person has to look. Never a silent skip.
     Failed(String),
+}
+
+/// Why a candidate did not make it into the contest.
+///
+/// The distinction is the whole point: **being too large is not a failure**, it
+/// is a candidate that lost. Conflating the two is what made a 94 MB source
+/// stop dead at the stream copy and never reach the encoder that would have
+/// fixed it -- the copy came back legal in every way except size, that was
+/// reported as an error, and the run ended there.
+enum Rejected {
+    /// Legal in every respect except the size limit. Carries what it weighed.
+    TooLarge(u64),
+    /// Something actually went wrong: unreadable, wrong codec, wrong size, an
+    /// audio track that survived. A person has to look at these.
+    Broken(String),
 }
 
 /// One run, start to finish. Blocking; the caller owns the thread.
@@ -159,6 +185,9 @@ pub fn standardise(
         target: &target,
     };
     let mut candidates: Vec<Candidate> = Vec::new();
+    // The smallest thing that was produced and still refused on size. Kept so
+    // that "nothing survived" can say the number rather than shrugging.
+    let mut smallest_over: Option<u64> = None;
 
     // ── the exact candidate ──────────────────────────────────────────────
     // Only possible when nothing about the geometry has to move.
@@ -187,9 +216,18 @@ pub fn standardise(
 
         on_step(Step::Verifying);
         match verify.judge(&copy_path, Encode::Copy) {
-            Err(reason) => {
+            Err(Rejected::Broken(reason)) => {
                 let _ = std::fs::remove_file(&copy_path);
                 return Outcome::Failed(reason);
+            }
+            // A remux can only drop the audio track, so when the picture alone
+            // is over the limit there is nothing a copy can do about it -- which
+            // is precisely the case the AV1 competitor exists for. Treating this
+            // as an error meant a 94 MB source stopped here and never reached
+            // the encoder that would have fixed it.
+            Err(Rejected::TooLarge(weighed)) => {
+                smallest_over = Some(smallest_over.map_or(weighed, |s: u64| s.min(weighed)));
+                let _ = std::fs::remove_file(&copy_path);
             }
             Ok(candidate) => {
                 // A stream copy rewrites no picture, so it can only grow by
@@ -264,31 +302,30 @@ pub fn standardise(
             }
 
             on_step(Step::Verifying);
-            // Only being over the SIZE limit is worth another pass at a lower
-            // quality. Nothing else on the gate's list is fixed by CRF, so
-            // walking the ladder for it would just spend minutes to fail twice
-            // more.
-            let over_size = matches!(
-                read_verdict(&av1_path),
-                Some(gate::Verdict::TooLarge { .. })
-            );
-            if over_size && attempt + 1 < ladder.len() {
-                continue;
-            }
-
             match verify.judge(&av1_path, Encode::Av1(crf)) {
                 Ok(candidate) => {
                     av1_bytes = Some(candidate.bytes);
                     candidates.push(candidate);
                 }
-                Err(reason) => {
+                // Only being over the SIZE limit is worth another pass at a
+                // lower quality. Nothing else on the gate's list is fixed by
+                // CRF, so walking the ladder for those would spend minutes to
+                // fail twice more.
+                Err(Rejected::TooLarge(weighed)) => {
+                    smallest_over = Some(smallest_over.map_or(weighed, |s: u64| s.min(weighed)));
+                    let _ = std::fs::remove_file(&av1_path);
+                    if attempt + 1 < ladder.len() {
+                        continue;
+                    }
+                }
+                Err(Rejected::Broken(reason)) => {
                     let _ = std::fs::remove_file(&av1_path);
                     if target.must_reencode {
                         // There is no other way to make this file legal.
                         let _ = std::fs::remove_file(&copy_path);
                         return Outcome::Failed(reason);
                     }
-                    // Merely offered, and the exact copy is already known good.
+                    // Merely offered, and a copy may already be in the contest.
                 }
             }
             break;
@@ -306,11 +343,12 @@ pub fn standardise(
         }
     }
 
-    // A forced re-encode has no compliant copy behind it: the encode IS the
-    // fix, so stopping it leaves nothing to ship. Where a copy exists it is
-    // already correct, and cancelling only forfeits the chance of a smaller
-    // file -- so that path falls through and ships it.
-    if av1_cancelled && target.must_reencode {
+    // Cancelling forfeits a smaller file where a compliant copy already exists,
+    // and forfeits EVERYTHING where one does not -- a forced re-encode, or a
+    // source so heavy that the copy was over the limit too. The test is simply
+    // whether anything is left to ship, which is what the charter was told the
+    // button would decide.
+    if av1_cancelled && candidates.is_empty() {
         let _ = std::fs::remove_file(&copy_path);
         return Outcome::Cancelled;
     }
@@ -322,7 +360,12 @@ pub fn standardise(
     let Some(chosen) = pick(&mut candidates) else {
         let _ = std::fs::remove_file(&copy_path);
         let _ = std::fs::remove_file(&av1_path);
-        return Outcome::Failed("no candidate survived — this file needs a human".to_owned());
+        // Everything that came out was legal apart from its weight. That is not
+        // a defect to report as one -- it is the answer, and it has a number.
+        return match smallest_over {
+            Some(smallest) => Outcome::StillTooLarge { smallest },
+            None => Outcome::Failed("no candidate survived — this file needs a human".to_owned()),
+        };
     };
 
     let treatment = match chosen.encode {
@@ -383,11 +426,6 @@ fn pick(candidates: &mut Vec<Candidate>) -> Option<Candidate> {
     Some(candidates.swap_remove(best))
 }
 
-fn read_verdict(path: &Path) -> Option<gate::Verdict> {
-    let bytes = std::fs::read(path).ok()?;
-    Some(gate::judge(&bytes).1)
-}
-
 /// Holds a candidate to the gate and to still being the same video.
 struct Verify<'a> {
     before: &'a Facts,
@@ -401,18 +439,25 @@ impl Verify<'_> {
     /// own gate refuses has misled the charter, which is worse than not
     /// checking. The rest catch an encode that succeeded at the wrong job --
     /// scaled to the wrong size, or quietly not trimmed.
-    fn judge(&self, path: &Path, encode: Encode) -> Result<Candidate, String> {
+    ///
+    /// Being over the size limit comes back as [`Rejected::TooLarge`] and
+    /// everything else as [`Rejected::Broken`], because the caller does
+    /// genuinely different things with them: one is a candidate that lost and
+    /// the other is a defect.
+    fn judge(&self, path: &Path, encode: Encode) -> Result<Candidate, Rejected> {
+        let broken = |reason: String| Err(Rejected::Broken(reason));
+
         let bytes = match std::fs::read(path) {
             Ok(bytes) => bytes,
-            Err(error) => return Err(format!("the result could not be read back: {error}")),
+            Err(error) => return broken(format!("the result could not be read back: {error}")),
         };
         let size = bytes.len() as u64;
         let Some(after) = gate::probe(&bytes) else {
-            return Err("the result is not a readable MP4".to_owned());
+            return broken("the result is not a readable MP4".to_owned());
         };
 
         if after.has_audio {
-            return Err("the result still carries an audio track".to_owned());
+            return broken("the result still carries an audio track".to_owned());
         }
 
         let wanted_codec = match encode {
@@ -420,16 +465,19 @@ impl Verify<'_> {
             Encode::Copy => self.before.codec,
         };
         if after.codec != wanted_codec {
-            return Err(format!(
+            return broken(format!(
                 "the result is {}, not {}",
                 after.codec.unwrap_or("an unrecognised codec"),
                 wanted_codec.unwrap_or("the source's codec"),
             ));
         }
 
-        let verdict = gate::check(size, Some(&after));
-        if !verdict.passes() {
-            return Err(format!("the result would be refused: {}", verdict.code()));
+        match gate::check(size, Some(&after)) {
+            gate::Verdict::TooLarge { .. } => return Err(Rejected::TooLarge(size)),
+            verdict if !verdict.passes() => {
+                return broken(format!("the result would be refused: {}", verdict.code()));
+            }
+            _ => {}
         }
 
         let wanted_size = self
@@ -437,7 +485,7 @@ impl Verify<'_> {
             .size
             .unwrap_or((self.before.width, self.before.height));
         if (after.width, after.height) != wanted_size {
-            return Err(format!(
+            return broken(format!(
                 "the result is {}x{}, expected {}x{}",
                 after.width, after.height, wanted_size.0, wanted_size.1
             ));
@@ -449,7 +497,7 @@ impl Verify<'_> {
                 // a second past the mark. A second of overshoot is not a
                 // failure; silently not trimming at all is.
                 if after.duration > trim_to + plan::TRIM_TOLERANCE {
-                    return Err(format!(
+                    return broken(format!(
                         "the trim did not take: {:.1}s against {trim_to:.1}s",
                         after.duration
                     ));
@@ -458,7 +506,7 @@ impl Verify<'_> {
             None => {
                 let drift = (after.duration - self.before.duration).abs() / self.before.duration;
                 if drift > 0.02 {
-                    return Err(format!(
+                    return broken(format!(
                         "the length changed from {:.2}s to {:.2}s",
                         self.before.duration, after.duration
                     ));

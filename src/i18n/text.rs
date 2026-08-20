@@ -799,6 +799,90 @@ pub static FAILED: Text = Text {
     ru: "С этим файлом не получилось",
 };
 
+/// Labels the full path of the file that was written. The charter is about to
+/// go and upload it, so where it went is not a detail.
+pub static SAVED_TO: Text = Text {
+    en: "Saved to",
+    zh_hans: "已保存到",
+    zh_hant: "已儲存到",
+    ja: "保存先",
+    ko: "저장 위치",
+    de: "Gespeichert unter",
+    es: "Guardado en",
+    fr: "Enregistré dans",
+    hr: "Spremljeno u",
+    hu: "Mentve ide",
+    id: "Disimpan ke",
+    nl: "Opgeslagen in",
+    pt: "Salvo em",
+    ru: "Сохранено в",
+};
+
+/// The title of the save dialog.
+pub static SAVE_TITLE: Text = Text {
+    en: "Save the background video as",
+    zh_hans: "背景视频保存为",
+    zh_hant: "背景影片另存為",
+    ja: "背景動画の保存先",
+    ko: "배경 영상 저장",
+    de: "Hintergrundvideo speichern unter",
+    es: "Guardar el vídeo de fondo como",
+    fr: "Enregistrer la vidéo de fond sous",
+    hr: "Spremi pozadinski videozapis kao",
+    hu: "Háttérvideó mentése másként",
+    id: "Simpan video latar sebagai",
+    nl: "Achtergrondvideo opslaan als",
+    pt: "Salvar o vídeo de fundo como",
+    ru: "Сохранить фоновое видео как",
+};
+
+/// Not a failure. Everything produced was legal except its weight, which is a
+/// statement about the LENGTH of the source and nothing Press will decide on
+/// the charter's behalf.
+pub static STILL_TOO_LARGE: Text = Text {
+    en: "Too long to fit",
+    zh_hans: "太长了，压不进去",
+    zh_hant: "太長了，壓不進去",
+    ja: "長すぎて収まりません",
+    ko: "너무 길어서 담기지 않습니다",
+    de: "Zu lang, um hineinzupassen",
+    es: "Demasiado largo para caber",
+    fr: "Trop long pour tenir",
+    hr: "Predugo da bi stalo",
+    hu: "Túl hosszú, nem fér bele",
+    id: "Terlalu panjang untuk muat",
+    nl: "Te lang om te passen",
+    pt: "Longo demais para caber",
+    ru: "Слишком длинное, не помещается",
+};
+
+pub static STILL_TOO_LARGE_DETAIL: Text = Text {
+    en: "Even at the lowest quality it comes to {size} MB, against a limit of \
+         {limit} MB. Trim it shorter and press again.",
+    zh_hans: "即使压到最低画质也有 {size} MB，上限是 {limit} MB。把它裁短一点再试一次。",
+    zh_hant: "即使壓到最低畫質也有 {size} MB，上限是 {limit} MB。把它裁短一點再試一次。",
+    ja: "画質を最低まで落としても {size} MB あり、上限は {limit} MB です。短く切ってからもう一度お試しください。",
+    ko: "가장 낮은 화질로도 {size} MB이고 제한은 {limit} MB입니다. 더 짧게 잘라서 다시 시도해 주세요.",
+    de: "Selbst bei niedrigster Qualität sind es {size} MB, das Limit liegt bei \
+         {limit} MB. Kürze es und drücke noch einmal.",
+    es: "Incluso con la calidad más baja ocupa {size} MB, y el límite es de \
+         {limit} MB. Recórtalo y vuelve a intentarlo.",
+    fr: "Même à la qualité la plus basse, il fait {size} Mo, pour une limite de \
+         {limit} Mo. Raccourcissez-le et réessayez.",
+    hr: "Čak i pri najnižoj kvaliteti ima {size} MB, a ograničenje je {limit} MB. \
+         Skratite ga i pokušajte ponovno.",
+    hu: "A legalacsonyabb minőségen is {size} MB, a korlát pedig {limit} MB. \
+         Vágd rövidebbre, és próbáld újra.",
+    id: "Bahkan pada kualitas terendah ukurannya {size} MB, sedangkan batasnya \
+         {limit} MB. Potong lebih pendek lalu coba lagi.",
+    nl: "Zelfs op de laagste kwaliteit is het {size} MB, tegen een limiet van \
+         {limit} MB. Kort het in en probeer het opnieuw.",
+    pt: "Mesmo na qualidade mais baixa fica com {size} MB, contra um limite de \
+         {limit} MB. Corte um trecho e tente de novo.",
+    ru: "Даже на самом низком качестве получается {size} МБ при пределе {limit} МБ. \
+         Обрежьте его короче и попробуйте снова.",
+};
+
 pub static SHOW_IN_FOLDER: Text = Text {
     en: "Show in folder",
     zh_hans: "打开所在文件夹",
@@ -897,6 +981,10 @@ pub static EVERY_STRING: &[(&str, &Text)] = &[
     ("ALREADY_STANDARD", &ALREADY_STANDARD),
     ("CANCELLED", &CANCELLED),
     ("FAILED", &FAILED),
+    ("SAVED_TO", &SAVED_TO),
+    ("SAVE_TITLE", &SAVE_TITLE),
+    ("STILL_TOO_LARGE", &STILL_TOO_LARGE),
+    ("STILL_TOO_LARGE_DETAIL", &STILL_TOO_LARGE_DETAIL),
     ("SHOW_IN_FOLDER", &SHOW_IN_FOLDER),
     ("ANOTHER", &ANOTHER),
     ("NO_ENCODER", &NO_ENCODER),

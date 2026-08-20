@@ -116,9 +116,26 @@ fn report(path: &Path) -> bool {
 
 /// Produce a file the server accepts, beside the source.
 fn repair(path: &Path) -> bool {
-    let output = path.with_file_name("video.mp4");
+    // Named after the SOURCE, so a folder of ten videos produces ten results
+    // rather than each one silently destroying the last. The window asks where
+    // to put it; nothing here can ask, so nothing here overwrites -- a batch
+    // that eats its own earlier output is worse than one that stops and says
+    // the name is taken.
+    let stem = path.file_stem().unwrap_or(path.as_os_str());
+    let mut name_out = stem.to_os_string();
+    name_out.push(".press.mp4");
+    let output = path.with_file_name(name_out);
+
     if output == path {
         println!("{:<40} refusing to overwrite the source", name(path));
+        return true;
+    }
+    if output.exists() {
+        println!(
+            "{:<40} {} already exists, leaving it alone",
+            name(path),
+            name(&output)
+        );
         return true;
     }
 
@@ -172,6 +189,14 @@ fn repair(path: &Path) -> bool {
         }
         Outcome::Cancelled => {
             println!("{:<32} cancelled, nothing written", "");
+            true
+        }
+        Outcome::StillTooLarge { smallest } => {
+            println!(
+                "TOO LONG: smallest was {} MB, limit is {} MB",
+                smallest.div_ceil(1024 * 1024),
+                euterpe_press::gate::limits::MAX_BYTES.div_ceil(1024 * 1024),
+            );
             true
         }
         Outcome::Failed(reason) => {
