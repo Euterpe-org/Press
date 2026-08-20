@@ -64,6 +64,27 @@ often than a software one, which makes the GPU time worse than wasted. Hardware
 
 Press is fast because it usually does not encode at all.
 
+## It does not update itself
+
+Deliberate, decided 2026-08-20. Euterpe's file-distribution API
+(`GET /api/distribution/{bucket}`) requires a signed-in user, and there is no
+public read path a version check could use: `/api/public/version` reports the
+*server's* version and `/api/public/desktop-download` is bound to the desktop
+app's Velopack installers. Making a charter sign in so that a local video tool
+can look up its own version number is a worse trade than shipping without the
+feature, so Press ships without it.
+
+Velopack was considered and rejected for the same reason plus a second one:
+`velopack_service.PACK_ID` is hard-coded to `"Euterpe"`, so a second product
+would mean changing Euterpe.Web's table, its routes and the RID allowlist in its
+nginx config — a great deal of machinery for one single-file tool.
+
+If a public read path ever exists, the check belongs in one place: compare with
+a real SemVer parser and offer an update only when the server's version is
+**strictly greater**. `?latest` on that API means *most recently uploaded*, not
+highest version (`ORDER BY created_at DESC`), so treating "different" as "newer"
+would let one back-fill downgrade every install.
+
 ## Build
 
 ```pwsh

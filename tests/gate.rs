@@ -200,6 +200,44 @@ fn size_is_judged_before_anything_is_parsed() {
     assert_eq!(gate::check(limits::MAX_BYTES + 1, None).code(), "VIDEO_TOO_LARGE");
 }
 
+/// The media header may CORRECT the sample table, never overrule it -- and when
+/// the correction lands on an exact half tick, it rounds half UP.
+///
+/// Half-up is not this port's choice: Euterpe.Web unified on it (`d5eeba36`)
+/// precisely so that every implementation of the gate can use its own language's
+/// rounding. Python spells it `floor(x + 0.5)` because `round()` there sends
+/// halves to EVEN; JavaScript's `Math.round` and Rust's `f64::round` already do
+/// the right thing. Getting it wrong here shifts the reported frame rate by
+/// 0.0019 -- six orders of magnitude above any float tolerance, so this fails
+/// loudly rather than drifting.
+///
+/// The three fixtures are hand-assembled (`tools/synth.py`) because no muxer
+/// writes a header that contradicts its own sample table, and that contradiction
+/// is the entire subject.
+#[test]
+fn the_media_header_corrects_the_sample_table_but_cannot_overrule_it() {
+    let facts = |file: &str| {
+        let bytes = std::fs::read(fixtures_dir().join(file)).expect("fixture");
+        gate::probe(&bytes).expect("parses")
+    };
+
+    // 306 samples x 33 ticks = 10098, and 10098 * 1.25 is exactly 12622.5.
+    // Half-up caps at 12623; half-to-even would cap at 12622 and report
+    // 24.243385 instead.
+    assert_eq!(round6(facts("synth_stretch_half.mp4").fps), 24.241464, "half rounds UP");
+
+    // Within the 1.25x allowance the header simply wins: live chart 233 reads
+    // 30.31 fps from its table alone and 30.01 once the header is consulted.
+    assert_eq!(round6(facts("synth_stretch_corrects.mp4").duration), 10.298);
+
+    // Past it, the cap is what is used. A header claiming three times its own
+    // samples' duration would otherwise divide the frame rate and wave a
+    // 120 fps file straight through.
+    let lies = facts("synth_stretch_lies.mp4");
+    assert_eq!(round6(lies.duration), 12.623, "capped at 1.25x, not the header's 30.0s");
+    assert_eq!(round6(lies.fps), round6(facts("synth_stretch_half.mp4").fps));
+}
+
 /// The structural problems come first, each ahead of an audio track that would
 /// otherwise shadow them. This is the bug Press found in the server on
 /// 2026-08-20 (Euterpe.Web `70a9fa8f`): the audio test sat above the frame-rate

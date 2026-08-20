@@ -453,24 +453,6 @@ fn printable_fourcc(fourcc: &[u8; 4]) -> String {
     String::from_utf8_lossy(fourcc).trim_matches(' ').to_owned()
 }
 
-/// Python's `round()` -- half to EVEN, which `f64::round()` does not do (it
-/// rounds half away from zero). Reached only when a media header stretches a
-/// sample table by exactly .5 of a tick, but the server is the authority and a
-/// port that is right except at one boundary is a port that will be wrong there.
-fn round_half_to_even(x: f64) -> f64 {
-    let floor = x.floor();
-    let frac = x - floor;
-    if frac > 0.5 {
-        floor + 1.0
-    } else if frac < 0.5 {
-        floor
-    } else if (floor / 2.0).fract() == 0.0 {
-        floor
-    } else {
-        floor + 1.0
-    }
-}
-
 /// The track to judge: the first whose media handler says `vide`, and failing
 /// that the first whose sample entry names a video codec.
 ///
@@ -564,7 +546,18 @@ pub fn probe(data: &[u8]) -> Option<Facts> {
     if ticks == 0 {
         ticks = header_ticks;
     } else if header_ticks > ticks {
-        let stretched = round_half_to_even(ticks as f64 * MAX_HEADER_STRETCH) as u128;
+        // Half-UP, which is what `f64::round()` already does. The server spells
+        // it `floor(x + 0.5)` because Python's `round()` sends halves to EVEN
+        // (Euterpe.Web `d5eeba36`, which unified on half-up precisely so that
+        // every other implementation of this gate could use its own language's
+        // rounding instead of carrying a helper that has to be kept correct).
+        //
+        // `.round()` and `floor(x + 0.5)` are not interchangeable in general --
+        // that equivalence is what gave Java's `Math.round(0.49999999999999994)`
+        // its famous wrong answer -- but they are here: `ticks` is integral and
+        // 1.25 is exactly representable, so the product's fraction is always
+        // one of 0, .25, .5, .75 and never the pathological value.
+        let stretched = (ticks as f64 * MAX_HEADER_STRETCH).round() as u128;
         ticks = header_ticks.min(stretched);
     }
 

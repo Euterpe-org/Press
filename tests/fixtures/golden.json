@@ -274,6 +274,48 @@
       "verdict": null
     },
     {
+      "file": "synth_stretch_corrects.mp4",
+      "size": 355,
+      "facts": {
+        "codec": "h264",
+        "raw_fourcc": "avc1",
+        "width": 320,
+        "height": 180,
+        "fps": 29.714508,
+        "duration": 10.298,
+        "has_audio": false
+      },
+      "verdict": null
+    },
+    {
+      "file": "synth_stretch_half.mp4",
+      "size": 355,
+      "facts": {
+        "codec": "h264",
+        "raw_fourcc": "avc1",
+        "width": 320,
+        "height": 180,
+        "fps": 24.241464,
+        "duration": 12.623,
+        "has_audio": false
+      },
+      "verdict": null
+    },
+    {
+      "file": "synth_stretch_lies.mp4",
+      "size": 355,
+      "facts": {
+        "codec": "h264",
+        "raw_fourcc": "avc1",
+        "width": 320,
+        "height": 180,
+        "fps": 24.241464,
+        "duration": 12.623,
+        "has_audio": false
+      },
+      "verdict": null
+    },
+    {
       "file": "truncated.mp4",
       "size": 2048,
       "facts": null,

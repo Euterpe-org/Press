@@ -103,6 +103,12 @@ $plain = [System.IO.File]::ReadAllBytes((Join-Path $out "plain_h264.mp4"))
 [System.IO.File]::WriteAllBytes((Join-Path $out "truncated.mp4"), $plain[0..([math]::Min(2047, $plain.Length - 1))])
 "{0,-24} {1,8} KB" -f "truncated.mp4", 2
 
+# ── the boundaries no muxer will produce ─────────────────────────────────
+# A header that contradicts its own sample table has to be assembled by hand;
+# see tools/synth.py. Stdlib only, so it needs no project.
+& uv run --no-project python (Join-Path $PSScriptRoot "synth.py")
+if ($LASTEXITCODE -ne 0) { throw "tools/synth.py failed" }
+
 Write-Output ""
 Write-Output "fixtures in $out"
 Write-Output "now run:  uv run --project <Euterpe.Web> python tools/golden.py"
