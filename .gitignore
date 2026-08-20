@@ -1,0 +1,6 @@
+/target
+
+# The embedded encoder, dropped here by the build. It is a release artifact
+# built in CI, not something that belongs in history -- see tools/README.
+/vendor/ffmpeg.exe
+/vendor/ffmpeg.exe.gz

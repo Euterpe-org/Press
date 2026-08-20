@@ -1,0 +1,305 @@
+{
+  "constants": {
+    "VIDEO_MAX_BYTES": 83886080,
+    "VIDEO_MAX_WIDTH": 2560,
+    "VIDEO_MAX_HEIGHT": 1440,
+    "VIDEO_MAX_PIXELS": 3686400,
+    "VIDEO_MAX_FPS": 60,
+    "VIDEO_ALLOWED_CODECS": [
+      "av1",
+      "h264",
+      "h265"
+    ],
+    "VIDEO_OVERRUN_ALLOWANCE_SECONDS": 10
+  },
+  "fixtures": [
+    {
+      "file": "audio_fps120.mp4",
+      "size": 49567,
+      "facts": {
+        "codec": "h264",
+        "raw_fourcc": "avc1",
+        "width": 320,
+        "height": 180,
+        "fps": 120.0,
+        "duration": 1.0,
+        "has_audio": true
+      },
+      "verdict": {
+        "code": "VIDEO_FPS_TOO_HIGH",
+        "params": {
+          "fps": 120,
+          "limit": 60
+        }
+      }
+    },
+    {
+      "file": "audio_h264.mp4",
+      "size": 29510,
+      "facts": {
+        "codec": "h264",
+        "raw_fourcc": "avc1",
+        "width": 320,
+        "height": 180,
+        "fps": 30.0,
+        "duration": 1.0,
+        "has_audio": true
+      },
+      "verdict": {
+        "code": "VIDEO_HAS_AUDIO",
+        "params": {}
+      }
+    },
+    {
+      "file": "audio_pixels_over.mp4",
+      "size": 39696,
+      "facts": {
+        "codec": "h264",
+        "raw_fourcc": "avc1",
+        "width": 2560,
+        "height": 1444,
+        "fps": 30.0,
+        "duration": 1.0,
+        "has_audio": true
+      },
+      "verdict": {
+        "code": "VIDEO_RESOLUTION_TOO_HIGH",
+        "params": {
+          "width": 2560,
+          "height": 1444,
+          "maxWidth": 2560,
+          "maxHeight": 1440
+        }
+      }
+    },
+    {
+      "file": "audio_vp9.mp4",
+      "size": 24347,
+      "facts": {
+        "codec": null,
+        "raw_fourcc": "vp09",
+        "width": 320,
+        "height": 180,
+        "fps": 30.0,
+        "duration": 1.0,
+        "has_audio": true
+      },
+      "verdict": {
+        "code": "VIDEO_FORMAT_UNSUPPORTED",
+        "params": {
+          "codec": "vp09"
+        }
+      }
+    },
+    {
+      "file": "av1.mp4",
+      "size": 32933,
+      "facts": {
+        "codec": "av1",
+        "raw_fourcc": "av01",
+        "width": 320,
+        "height": 180,
+        "fps": 30.0,
+        "duration": 1.0,
+        "has_audio": false
+      },
+      "verdict": null
+    },
+    {
+      "file": "faststart.mp4",
+      "size": 19234,
+      "facts": {
+        "codec": "h264",
+        "raw_fourcc": "avc1",
+        "width": 320,
+        "height": 180,
+        "fps": 30.0,
+        "duration": 1.0,
+        "has_audio": false
+      },
+      "verdict": null
+    },
+    {
+      "file": "fps120.mp4",
+      "size": 39259,
+      "facts": {
+        "codec": "h264",
+        "raw_fourcc": "avc1",
+        "width": 320,
+        "height": 180,
+        "fps": 120.0,
+        "duration": 1.0,
+        "has_audio": false
+      },
+      "verdict": {
+        "code": "VIDEO_FPS_TOO_HIGH",
+        "params": {
+          "fps": 120,
+          "limit": 60
+        }
+      }
+    },
+    {
+      "file": "fragmented.mp4",
+      "size": 19205,
+      "facts": {
+        "codec": "h264",
+        "raw_fourcc": "avc1",
+        "width": 320,
+        "height": 180,
+        "fps": 30.0,
+        "duration": 1.0,
+        "has_audio": false
+      },
+      "verdict": null
+    },
+    {
+      "file": "hevc.mp4",
+      "size": 21559,
+      "facts": {
+        "codec": "h265",
+        "raw_fourcc": "hvc1",
+        "width": 320,
+        "height": 180,
+        "fps": 30.0,
+        "duration": 1.0,
+        "has_audio": false
+      },
+      "verdict": null
+    },
+    {
+      "file": "mpeg4.mp4",
+      "size": 62007,
+      "facts": {
+        "codec": null,
+        "raw_fourcc": "mp4v",
+        "width": 320,
+        "height": 180,
+        "fps": 30.0,
+        "duration": 1.0,
+        "has_audio": false
+      },
+      "verdict": {
+        "code": "VIDEO_FORMAT_UNSUPPORTED",
+        "params": {
+          "codec": "mp4v"
+        }
+      }
+    },
+    {
+      "file": "not_an_mp4.bin",
+      "size": 10,
+      "facts": null,
+      "verdict": {
+        "code": "INVALID_VIDEO",
+        "params": {}
+      }
+    },
+    {
+      "file": "pixels_at_limit.mp4",
+      "size": 29095,
+      "facts": {
+        "codec": "h264",
+        "raw_fourcc": "avc1",
+        "width": 2560,
+        "height": 1440,
+        "fps": 30.0,
+        "duration": 1.0,
+        "has_audio": false
+      },
+      "verdict": null
+    },
+    {
+      "file": "pixels_over.mp4",
+      "size": 29396,
+      "facts": {
+        "codec": "h264",
+        "raw_fourcc": "avc1",
+        "width": 2560,
+        "height": 1444,
+        "fps": 30.0,
+        "duration": 1.0,
+        "has_audio": false
+      },
+      "verdict": {
+        "code": "VIDEO_RESOLUTION_TOO_HIGH",
+        "params": {
+          "width": 2560,
+          "height": 1444,
+          "maxWidth": 2560,
+          "maxHeight": 1440
+        }
+      }
+    },
+    {
+      "file": "plain_h264.mp4",
+      "size": 19234,
+      "facts": {
+        "codec": "h264",
+        "raw_fourcc": "avc1",
+        "width": 320,
+        "height": 180,
+        "fps": 30.0,
+        "duration": 1.0,
+        "has_audio": false
+      },
+      "verdict": null
+    },
+    {
+      "file": "portrait.mp4",
+      "size": 20286,
+      "facts": {
+        "codec": "h264",
+        "raw_fourcc": "avc1",
+        "width": 180,
+        "height": 320,
+        "fps": 30.0,
+        "duration": 1.0,
+        "has_audio": false
+      },
+      "verdict": null
+    },
+    {
+      "file": "quicktime_brand.mp4",
+      "size": 19181,
+      "facts": {
+        "codec": "h264",
+        "raw_fourcc": "avc1",
+        "width": 320,
+        "height": 180,
+        "fps": 30.0,
+        "duration": 1.0,
+        "has_audio": false
+      },
+      "verdict": null
+    },
+    {
+      "file": "truncated.mp4",
+      "size": 2048,
+      "facts": null,
+      "verdict": {
+        "code": "INVALID_VIDEO",
+        "params": {}
+      }
+    },
+    {
+      "file": "vp9.mp4",
+      "size": 14047,
+      "facts": {
+        "codec": null,
+        "raw_fourcc": "vp09",
+        "width": 320,
+        "height": 180,
+        "fps": 30.0,
+        "duration": 1.0,
+        "has_audio": false
+      },
+      "verdict": {
+        "code": "VIDEO_FORMAT_UNSUPPORTED",
+        "params": {
+          "codec": "vp09"
+        }
+      }
+    }
+  ]
+}
