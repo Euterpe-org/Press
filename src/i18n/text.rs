@@ -1160,6 +1160,48 @@ pub static WILL_OPENING: Text = Text {
     ru: "срезать {shift} с начала",
 };
 
+/// The headline after an encode that did NOT make the file smaller.
+///
+/// "压好了" over `2.6 MB → 3.2 MB` is the window congratulating itself for
+/// something it did not do, and it reads as a lie because it is one. A crop has
+/// to be re-encoded and a re-encode of an already-efficient file can come back
+/// larger; that is a fair outcome, and "compressed" is not a fair word for it.
+pub static BENCH_APPLIED: Text = Text {
+    en: "Done",
+    zh_hans: "改好了",
+    zh_hant: "改好了",
+    ja: "完了しました",
+    ko: "완료했습니다",
+    de: "Erledigt",
+    es: "Hecho",
+    fr: "Terminé",
+    hr: "Gotovo",
+    hu: "Kész",
+    id: "Selesai",
+    nl: "Klaar",
+    pt: "Pronto",
+    ru: "Готово",
+};
+
+/// The other side of [`BENCH_SMALLER`]. Stated rather than hidden: a file that
+/// grew is a fact the charter is about to discover for themselves.
+pub static BENCH_BIGGER: Text = Text {
+    en: "{percent}% larger",
+    zh_hans: "大了 {percent}%",
+    zh_hant: "大了 {percent}%",
+    ja: "{percent}% 大きく",
+    ko: "{percent}% 커짐",
+    de: "{percent}% größer",
+    es: "{percent}% más grande",
+    fr: "{percent}% plus gros",
+    hr: "{percent}% veće",
+    hu: "{percent}%-kal nagyobb",
+    id: "{percent}% lebih besar",
+    nl: "{percent}% groter",
+    pt: "{percent}% maior",
+    ru: "больше на {percent}%",
+};
+
 /// The headline after an encode has just produced something.
 ///
 /// Separate from [`BENCH_READY`] on purpose. The state after a successful encode
@@ -1739,6 +1781,8 @@ pub static EVERY_STRING: &[(&str, &Text)] = &[
     ("WILL_OPENING", &WILL_OPENING),
     ("BENCH_READY", &BENCH_READY),
     ("BENCH_COMPRESSED", &BENCH_COMPRESSED),
+    ("BENCH_APPLIED", &BENCH_APPLIED),
+    ("BENCH_BIGGER", &BENCH_BIGGER),
     ("BENCH_SMALLER", &BENCH_SMALLER),
     ("BENCH_ALLOWANCE", &BENCH_ALLOWANCE),
     ("BENCH_REMAINING", &BENCH_REMAINING),

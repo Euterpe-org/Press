@@ -1385,7 +1385,22 @@ impl Press {
                     (Some(Said::StillTooLarge { .. }), ..) => {
                         (text::STILL_TOO_LARGE.get(lang), theme::NOTICE)
                     }
-                    (_, true, false) => (text::BENCH_COMPRESSED.get(lang), theme::GOOD),
+                    // "Compressed" is claimed only where it is true. A crop
+                    // has to be re-encoded, and a re-encode of an already-
+                    // efficient file can come back larger -- a fair outcome,
+                    // and not one to put a congratulation on.
+                    (_, true, false) => (
+                        if bench
+                            .encoded
+                            .as_ref()
+                            .is_some_and(|d| d.bytes < bench.source_bytes)
+                        {
+                            text::BENCH_COMPRESSED.get(lang)
+                        } else {
+                            text::BENCH_APPLIED.get(lang)
+                        },
+                        theme::GOOD,
+                    ),
                     // Neither good news nor bad, so neither green nor amber:
                     // a plain statement that there is a press outstanding.
                     (_, false, false) if requested => (text::BENCH_WAITING.get(lang), theme::INK),
@@ -1440,15 +1455,11 @@ impl Press {
                 if let Some(done) = &bench.encoded {
                     ui.add_space(space::ROW);
                     theme::tally(ui, &megabytes(bench.source_bytes), &megabytes(done.bytes));
-                    if done.bytes < bench.source_bytes && bench.source_bytes > 0 {
-                        let saved = 100.0 - done.bytes as f64 / bench.source_bytes as f64 * 100.0;
+                    // Both directions. Hiding the growth would leave the
+                    // charter to find it in the two numbers directly above.
+                    if let Some(delta) = delta_line(bench, lang) {
                         ui.add_space(space::TIGHT);
-                        theme::muted(
-                            ui,
-                            &text::BENCH_SMALLER
-                                .get(lang)
-                                .replace("{percent}", &format!("{saved:.0}")),
-                        );
+                        theme::muted(ui, &delta);
                     }
                 }
 
@@ -1488,6 +1499,30 @@ fn file_name(path: &Path) -> String {
 /// One separator, everywhere. Three different spacings around the same dot is
 /// most of what "间距很随意" was pointing at.
 const SEP: &str = " · ";
+
+/// How the weight moved, in whichever direction it moved.
+///
+/// `None` only when it did not move at all. Stating the growth is not
+/// self-flagellation: the two numbers are directly above it, so the charter
+/// works it out either way, and a window that reports only its wins is a window
+/// nobody believes about anything.
+fn delta_line(bench: &Bench, lang: Lang) -> Option<String> {
+    let done = bench.encoded.as_ref()?;
+    if bench.source_bytes == 0 || done.bytes == bench.source_bytes {
+        return None;
+    }
+    let ratio = done.bytes as f64 / bench.source_bytes as f64;
+    let (template, percent) = if done.bytes < bench.source_bytes {
+        (&text::BENCH_SMALLER, (1.0 - ratio) * 100.0)
+    } else {
+        (&text::BENCH_BIGGER, (ratio - 1.0) * 100.0)
+    };
+    Some(
+        template
+            .get(lang)
+            .replace("{percent}", &format!("{percent:.0}")),
+    )
+}
 
 /// How much has been written, when anything has.
 fn written_line(lang: Lang, bytes: Option<u64>) -> Vec<String> {
