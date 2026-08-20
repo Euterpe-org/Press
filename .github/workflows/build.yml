@@ -1,0 +1,213 @@
+name: build
+
+# Press ships as one file with its own encoder inside it, so the encoder has to
+# be built before the program is. That is what this does, in two jobs: the
+# ffmpeg build is slow and changes almost never, so it is cached on the exact
+# flags that produced it and the second job usually just downloads it.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  # Bump to force a rebuild of the cached encoder. Every input that decides what
+  # comes out lives in this file, so the key is a hash of the file itself.
+  FFMPEG_VERSION: "8.1.2"
+  SVTAV1_VERSION: "v3.1.2"
+
+jobs:
+  encoder:
+    name: minimal ffmpeg
+    runs-on: windows-latest
+    outputs:
+      key: ${{ steps.key.outputs.value }}
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache key
+        id: key
+        shell: bash
+        run: echo "value=ffmpeg-${{ env.FFMPEG_VERSION }}-svt-${{ env.SVTAV1_VERSION }}-${{ hashFiles('.github/workflows/build.yml') }}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@v4
+        id: cache
+        with:
+          path: vendor/ffmpeg.exe
+          key: ${{ steps.key.outputs.value }}
+
+      - uses: msys2/setup-msys2@v2
+        if: steps.cache.outputs.cache-hit != 'true'
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            base-devel
+            git
+            diffutils
+            yasm
+            nasm
+            mingw-w64-x86_64-toolchain
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-pkgconf
+
+      # SVT-AV1 is the only external library in the build. dav1d is deliberately
+      # NOT included: the only thing Press decodes AV1 for is a 640-pixel
+      # viewfinder, where ffmpeg's own decoder is quick enough, and leaving it
+      # out removes a meson toolchain and several megabytes for no benefit the
+      # charter would ever see.
+      - name: Build SVT-AV1
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          set -eux
+          git clone --depth 1 --branch "$SVTAV1_VERSION" https://gitlab.com/AOMediaCodec/SVT-AV1.git /tmp/svt
+          cmake -S /tmp/svt -B /tmp/svt/build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/tmp/prefix \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DBUILD_APPS=OFF \
+            -DBUILD_DEC=OFF
+          cmake --build /tmp/svt/build --target install
+
+      # `--disable-everything` then name what Press actually uses. The list is
+      # short because the job is: read one of five codecs, write AV1 or raw
+      # frames, into MP4 or down a pipe.
+      #
+      #   decoders   what a charter might drag in. mpeg4 and vp9 are here
+      #              because they are exactly the files Press exists to FIX --
+      #              it has to read them to replace them.
+      #   rawvideo   the viewfinder. Frames come out of a pipe as RGBA.
+      #   scale,fps  the only two filters the recipe ever uses.
+      #   file,pipe  the only two protocols. No network at all.
+      - name: Build ffmpeg
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          set -eux
+          git clone --depth 1 --branch "n$FFMPEG_VERSION" https://git.ffmpeg.org/ffmpeg.git /tmp/ffmpeg
+          cd /tmp/ffmpeg
+          PKG_CONFIG_PATH=/tmp/prefix/lib/pkgconfig ./configure \
+            --prefix=/tmp/out \
+            --disable-everything \
+            --disable-autodetect \
+            --disable-network \
+            --disable-doc \
+            --disable-shared \
+            --enable-static \
+            --enable-small \
+            --disable-ffplay \
+            --disable-ffprobe \
+            --enable-libsvtav1 \
+            --enable-decoder=h264,hevc,vp8,vp9,mpeg4,av1,rawvideo \
+            --enable-parser=h264,hevc,vp8,vp9,mpeg4video,av1 \
+            --enable-bsf=extract_extradata,h264_mp4toannexb,hevc_mp4toannexb,vp9_superframe,av1_frame_merge,av1_frame_split \
+            --enable-demuxer=mov,matroska,avi,rawvideo \
+            --enable-muxer=mp4,rawvideo,null \
+            --enable-encoder=libsvtav1,rawvideo \
+            --enable-filter=scale,fps,format,null,copy \
+            --enable-protocol=file,pipe \
+            --pkg-config-flags=--static \
+            --extra-cflags=-I/tmp/prefix/include \
+            --extra-ldflags=-L/tmp/prefix/lib \
+            --extra-libs="-lstdc++ -static -static-libgcc -static-libstdc++"
+          make -j"$(nproc)"
+          strip ffmpeg.exe
+          mkdir -p "$GITHUB_WORKSPACE/vendor"
+          cp ffmpeg.exe "$GITHUB_WORKSPACE/vendor/ffmpeg.exe"
+
+      # The number this whole job exists to produce, and it belongs in the log
+      # rather than in somebody's estimate.
+      - name: Report size
+        shell: bash
+        run: |
+          ls -l vendor/ffmpeg.exe
+          echo "### Encoder: $(du -h vendor/ffmpeg.exe | cut -f1)" >> "$GITHUB_STEP_SUMMARY"
+
+      # It has to actually do the two jobs it was built for. A configure flag
+      # dropped by accident produces an ffmpeg that starts, reports a version,
+      # and then cannot encode -- which would only surface when a charter
+      # pressed the button.
+      - name: Prove it can do the work
+        shell: bash
+        run: |
+          set -eux
+          ./vendor/ffmpeg.exe -hide_banner -encoders | grep libsvtav1
+          ./vendor/ffmpeg.exe -y -v error -i tests/fixtures/fps120.mp4 \
+            -vf "scale=160:90:flags=lanczos,fps=60" \
+            -c:v libsvtav1 -crf 32 -preset 6 -pix_fmt yuv420p \
+            -an -movflags +faststart /tmp/probe.mp4
+          ./vendor/ffmpeg.exe -y -v error -i tests/fixtures/vp9.mp4 \
+            -an -sn -vf scale=160:90 -f rawvideo -pix_fmt rgba -frames:v 1 /tmp/frame.raw
+          test -s /tmp/probe.mp4
+          test "$(stat -c%s /tmp/frame.raw)" = "$((160 * 90 * 4))"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: encoder
+          path: vendor/ffmpeg.exe
+          retention-days: 7
+
+  press:
+    name: press
+    needs: encoder
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: encoder
+          path: vendor
+
+      - name: Format
+        run: cargo fmt --check
+
+      - name: Lint
+        run: cargo clippy --all-targets -- -D warnings
+
+      # Run against the SHIPPED encoder, not against whatever the runner image
+      # happens to have. The tests that decode and encode are the ones proving
+      # the minimal build is minimal enough, so pointing them at a fuller ffmpeg
+      # would defeat the exercise.
+      - name: Test
+        run: cargo test --release
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Report size
+        shell: bash
+        run: |
+          ls -l target/release/euterpe-press.exe
+          {
+            echo "### Press: $(du -h target/release/euterpe-press.exe | cut -f1)"
+            echo "(one file, encoder included)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Proof the shipped binary agrees with the server, run on the artifact
+      # itself rather than only in the test harness.
+      - name: The shipped binary agrees with the gate
+        shell: bash
+        run: |
+          set -eux
+          work=$(mktemp -d)
+          cp tests/fixtures/audio_h264.mp4 "$work/"
+          ./target/release/euterpe-press.exe --check tests/fixtures/plain_h264.mp4
+          ./target/release/euterpe-press.exe --check tests/fixtures/audio_h264.mp4 && exit 1 || true
+          ./target/release/euterpe-press.exe --fix "$work/audio_h264.mp4"
+          ./target/release/euterpe-press.exe --check "$work/video.mp4"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: euterpe-press
+          path: target/release/euterpe-press.exe
+          retention-days: 30

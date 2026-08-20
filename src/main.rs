@@ -11,7 +11,6 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use euterpe_press::app::Press;
-use euterpe_press::ffmpeg::Ffmpeg;
 use euterpe_press::gate::{self, Verdict};
 use euterpe_press::i18n::{Lang, text};
 use euterpe_press::plan::Trim;
@@ -66,7 +65,7 @@ fn main() -> ExitCode {
 
 fn window(open: Option<PathBuf>) -> eframe::Result {
     let lang = Lang::from_system();
-    let ffmpeg = encoder();
+    let ffmpeg = euterpe_press::encoder::resolve();
 
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
@@ -88,22 +87,6 @@ fn window(open: Option<PathBuf>) -> eframe::Result {
             Ok(Box::new(press))
         }),
     )
-}
-
-/// The encoder Press will run, or `None` if this build has none to run.
-///
-/// Development uses whatever is on PATH. A release carries its own and will
-/// resolve it here instead: a machine's stray ffmpeg must never be able to
-/// change what Press produces, because two builds disagreeing about one chart is
-/// exactly what using the server's recipe exists to prevent.
-fn encoder() -> Option<Ffmpeg> {
-    let usable = std::process::Command::new("ffmpeg")
-        .arg("-version")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success());
-    usable.then(Ffmpeg::on_path)
 }
 
 /// Read-only: what would the server say?
@@ -136,10 +119,14 @@ fn repair(path: &Path) -> bool {
     }
 
     let source_bytes = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
-    // Development runs against whatever ffmpeg is on PATH. A release carries its
-    // own: a machine's stray encoder must never be able to change what Press
-    // produces.
-    let ffmpeg = Ffmpeg::on_path();
+    // The SAME encoder the window uses, resolved the same way. Taking whatever
+    // was on PATH here would let `--fix` and the button produce different files
+    // from one build, which is precisely the drift that shipping our own
+    // encoder exists to prevent.
+    let Some(ffmpeg) = euterpe_press::encoder::resolve() else {
+        println!("{:<40} no encoder available", name(path));
+        return true;
+    };
 
     // The window owns a real one and wires it to a button. Nothing cancels a
     // command-line run, so this token is never set.

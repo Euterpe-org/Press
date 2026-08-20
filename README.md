@@ -85,11 +85,40 @@ a real SemVer parser and offer an update only when the server's version is
 highest version (`ORDER BY created_at DESC`), so treating "different" as "newer"
 would let one back-fill downgrade every install.
 
+## One file, encoder included
+
+A release carries its own ffmpeg, gzipped into the executable and unpacked on
+first use to `%TEMP%\Euterpe.Press\ffmpeg-{stamp}.exe`. The name is the content's
+own hash — the doctrine Euterpe.Mod already uses for its embedded natives — so a
+new build cannot collide with an older instance's still-locked file, and a stale
+build of the same length cannot stand in for this one.
+
+Shipping the encoder rather than finding one is the point, not the convenience.
+The recipe Press follows is the server's, and a machine's stray ffmpeg quietly
+producing something slightly different is exactly the drift that copying the
+recipe exists to prevent. A build with no embedded encoder falls back to `PATH`
+— that is a compile-time branch, for development, and a release never reaches
+it.
+
+The bundled build is `--disable-everything` plus only what Press uses: five
+decoders (including the VP9 and mpeg4 it exists to *replace*, which it must read
+first), the SVT-AV1 encoder, raw frames for the viewfinder, MP4 and pipe, and
+two filters. dav1d is deliberately absent: the only AV1 decoding Press does is a
+640-pixel preview.
+
+**Its size is measured in CI and reported in the run summary, not estimated
+here.** Building it needs a C toolchain this repository does not assume.
+
 ## Build
 
 ```pwsh
 cargo test                        # includes the agreement with the server
-cargo run -- video.mp4            # the verdict, from a terminal
+cargo run -- --check video.mp4    # the verdict, from a terminal
+cargo run -- --fix video.mp4      # produce one the server accepts
+cargo run                         # the window
 pwsh tools/make_fixtures.ps1      # regenerate the fixtures (needs ffmpeg)
 uv run --project ../Euterpe.Web python tools/golden.py   # re-record the answers
 ```
+
+`vendor/ffmpeg.exe`, if present, is embedded. CI puts it there; a developer's
+checkout has none and uses whatever is on `PATH`.

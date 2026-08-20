@@ -9,6 +9,7 @@
 //! planning scenarios -- rather than against a screenshot.
 
 pub mod app;
+pub mod encoder;
 pub mod ffmpeg;
 pub mod fonts;
 pub mod gate;

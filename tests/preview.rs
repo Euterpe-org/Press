@@ -6,7 +6,8 @@
 //! system video player would open -- which is precisely the file Press exists
 //! to fix.
 //!
-//! Needs ffmpeg on PATH; skips rather than fails without one.
+//! Runs against the encoder Press would ship; skips rather than fails when there
+//! is none to run.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -14,17 +15,14 @@ use std::time::{Duration, Instant};
 use euterpe_press::preview::{MAX_EDGE, Preview, preview_size};
 
 fn ffmpeg_path() -> Option<PathBuf> {
-    let ok = std::process::Command::new("ffmpeg")
-        .arg("-version")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success());
-    if ok {
-        Some(PathBuf::from("ffmpeg"))
-    } else {
-        eprintln!("skipping: no ffmpeg on PATH");
-        None
+    // The encoder Press would SHIP. A viewfinder that only works against the
+    // developer's fuller ffmpeg is a viewfinder that fails on the product.
+    match euterpe_press::encoder::resolve() {
+        Some(ffmpeg) => Some(ffmpeg.binary().to_path_buf()),
+        None => {
+            eprintln!("skipping: no encoder embedded and none on PATH");
+            None
+        }
     }
 }
 

@@ -1001,6 +1001,7 @@ name = "euterpe-press"
 version = "0.1.0"
 dependencies = [
  "eframe",
+ "flate2",
  "rfd",
  "serde",
  "serde_json",

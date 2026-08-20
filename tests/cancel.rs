@@ -5,9 +5,10 @@
 //! survives, and that the caller can tell a cancellation from a failure. A
 //! partial MP4 left on disk is worse than none, because it looks like a result.
 //!
-//! Needs ffmpeg on PATH. A release carries its own; these tests run against the
-//! developer's, and skip rather than fail where there is none, so a checkout
-//! without ffmpeg still gets a green suite for everything that does not need it.
+//! Run against the encoder Press would SHIP -- the embedded one where the build
+//! carries it, PATH only in a development checkout. Skips rather than fails when
+//! there is neither, so a checkout without ffmpeg still gets a green suite for
+//! everything that does not need one.
 
 use std::path::PathBuf;
 
@@ -16,15 +17,14 @@ use euterpe_press::plan::Trim;
 use euterpe_press::standardise::{self, Outcome};
 
 fn ffmpeg() -> Option<Ffmpeg> {
-    let probe = std::process::Command::new("ffmpeg")
-        .arg("-version")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status();
-    match probe {
-        Ok(status) if status.success() => Some(Ffmpeg::on_path()),
-        _ => {
-            eprintln!("skipping: no ffmpeg on PATH");
+    // The encoder Press would SHIP, resolved exactly as the product resolves it
+    // -- the embedded one where the build has it, PATH only in a development
+    // checkout. Reaching for PATH here would test a fuller ffmpeg than the one
+    // charters actually get.
+    match euterpe_press::encoder::resolve() {
+        Some(ffmpeg) => Some(ffmpeg),
+        None => {
+            eprintln!("skipping: no encoder embedded and none on PATH");
             None
         }
     }
@@ -53,17 +53,23 @@ fn a_cancelled_run_is_not_reported_as_a_failure() {
     let output = scratch("cancelled.mp4");
     let _ = std::fs::remove_file(&output);
 
-    // Thirty seconds of synthetic video at the slowest useful preset: long
-    // enough that the cancel lands mid-encode on any machine.
+    // A real fixture rather than a synthetic `lavfi` source: the encoder Press
+    // ships is built with only what Press needs, and lavfi is not part of that.
+    // A test that requires a fuller ffmpeg than the product does is a test that
+    // passes here and fails against the shipped binary.
+    //
+    // Its length does not matter. The token is set before the run starts, so the
+    // first progress line ends it -- and if the encode finished before that line
+    // was read, killing an already-exited process is harmless and the answer is
+    // the same.
+    let source = fixture("pixels_at_limit.mp4");
     let args: Vec<String> = [
         "ffmpeg",
         "-y",
         "-loglevel",
         "error",
-        "-f",
-        "lavfi",
         "-i",
-        "testsrc2=size=1280x720:rate=30:duration=30",
+        &source.to_string_lossy(),
         "-c:v",
         "libsvtav1",
         "-crf",
