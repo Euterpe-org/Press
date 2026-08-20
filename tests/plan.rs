@@ -219,6 +219,78 @@ fn the_trim_can_only_ever_take_the_tail() {
     }
 }
 
+/// The one place `-ss` is allowed to exist, and what it costs to use it.
+///
+/// The server's round never cuts an opening: it edits charts belonging to other
+/// people and shifting their picture against the music is damage nobody asked
+/// for. That is why [`plan::command`] has none and why the test above asserts it
+/// never will.
+///
+/// This is the other case. The charter is the author, looking at their own
+/// footage, deciding its first two seconds are a slate. The capability lives in
+/// a separately named function so the two acts cannot be confused, and so the
+/// invariant on the automatic path stays absolute rather than conditional.
+#[test]
+fn an_opening_cut_is_a_separate_act_with_its_own_rules() {
+    let target = Target {
+        size: Some((2560, 1440)),
+        fps: Some(60),
+        trim_to: Some(90.0),
+        must_reencode: true,
+        may_try_av1: false,
+    };
+    let cmd =
+        plan::command_with_opening_cut("IN.mp4", "OUT.mp4", &target, plan::CRF, 2.5, Some(90.0));
+
+    let ss = index_of(&cmd, "-ss").expect("this is the function that seeks");
+    let i = index_of(&cmd, "-i").expect("there is always an input");
+    assert!(
+        ss > i,
+        "-ss must sit AFTER -i: before it, ffmpeg jumps to the nearest keyframe \
+         instead of the frame the charter picked. {cmd:?}"
+    );
+    assert_eq!(cmd[ss + 1], "2.500", "the cut is where it was asked for");
+
+    // It can never be a stream copy. A copy starts at a keyframe -- seconds from
+    // the handle -- so it would land somewhere nobody chose.
+    assert!(has(&cmd, "-c:v") && has(&cmd, "libsvtav1"), "{cmd:?}");
+    assert!(
+        !has(&cmd, "copy"),
+        "an opening cut cannot be a remux: {cmd:?}"
+    );
+
+    // Everything the ordinary recipe guarantees still holds.
+    assert!(has(&cmd, "-an"), "{cmd:?}");
+    let filters = index_of(&cmd, "-vf")
+        .map(|i| cmd[i + 1].clone())
+        .unwrap_or_default();
+    assert!(filters.contains("scale=2560:1440"), "{filters}");
+    assert!(filters.contains("fps=60"), "{filters}");
+    assert_eq!(cmd.last().map(String::as_str), Some("OUT.mp4"));
+
+    // With nothing to keep past the cut there is no `-t` at all, rather than a
+    // `-t` of the whole remaining length: an argument that says nothing is an
+    // argument that can be wrong.
+    let open_ended =
+        plan::command_with_opening_cut("IN.mp4", "OUT.mp4", &target, plan::CRF, 2.5, None);
+    assert!(!has(&open_ended, "-t"), "{open_ended:?}");
+}
+
+/// Moving the opening is never something Press decides. `Trim::default()` leaves
+/// it alone, and only a charter dragging the handle can change that.
+#[test]
+fn the_opening_is_never_moved_on_the_charters_behalf() {
+    let untouched = plan::Trim::default();
+    assert_eq!(untouched.cut_opening, 0.0);
+    assert!(!untouched.moves_the_opening());
+    assert!(untouched.is_untouched());
+    assert_eq!(
+        untouched.allowance(240.0),
+        None,
+        "no trim means no length limit"
+    );
+}
+
 /// The audio track always goes. The game plays `music.ogg`; a background video's
 /// own audio is decoded by nobody and shipped to everybody -- about 0.66 GB
 /// across the catalogue when the gate first measured it.

@@ -14,6 +14,7 @@ use euterpe_press::app::Press;
 use euterpe_press::ffmpeg::Ffmpeg;
 use euterpe_press::gate::{self, Verdict};
 use euterpe_press::i18n::{Lang, text};
+use euterpe_press::plan::Trim;
 use euterpe_press::standardise::{self, Outcome, Step, Treatment};
 
 fn main() -> ExitCode {
@@ -50,7 +51,11 @@ fn main() -> ExitCode {
 
     let mut bad = false;
     for path in &files {
-        bad |= if repair_them { repair(path) } else { report(path) };
+        bad |= if repair_them {
+            repair(path)
+        } else {
+            report(path)
+        };
     }
     if bad {
         ExitCode::FAILURE
@@ -141,31 +146,32 @@ fn repair(path: &Path) -> bool {
     let cancel = euterpe_press::ffmpeg::Cancel::new();
 
     let mut last = String::new();
-    let outcome = standardise::standardise(&ffmpeg, path, &output, None, &cancel, |step| {
-        let line = match step {
-            Step::Reading => "reading".to_owned(),
-            Step::Copying(p) => format!("stream copy {}", percent(p.and_then(|p| p.fraction))),
-            Step::Encoding {
-                crf,
-                attempt,
-                progress,
-            } => format!(
-                "av1 crf {crf}{} {}",
-                if attempt > 1 {
-                    format!(" (attempt {attempt})")
-                } else {
-                    String::new()
-                },
-                percent(progress.and_then(|p| p.fraction)),
-            ),
-            Step::Verifying => "verifying".to_owned(),
-        };
-        if line != last {
-            print!("\r{:<40} {line:<32}", name(path));
-            let _ = std::io::Write::flush(&mut std::io::stdout());
-            last = line;
-        }
-    });
+    let outcome =
+        standardise::standardise(&ffmpeg, path, &output, Trim::default(), &cancel, |step| {
+            let line = match step {
+                Step::Reading => "reading".to_owned(),
+                Step::Copying(p) => format!("stream copy {}", percent(p.and_then(|p| p.fraction))),
+                Step::Encoding {
+                    crf,
+                    attempt,
+                    progress,
+                } => format!(
+                    "av1 crf {crf}{} {}",
+                    if attempt > 1 {
+                        format!(" (attempt {attempt})")
+                    } else {
+                        String::new()
+                    },
+                    percent(progress.and_then(|p| p.fraction)),
+                ),
+                Step::Verifying => "verifying".to_owned(),
+            };
+            if line != last {
+                print!("\r{:<40} {line:<32}", name(path));
+                let _ = std::io::Write::flush(&mut std::io::stdout());
+                last = line;
+            }
+        });
 
     print!("\r{:<40} ", name(path));
     match outcome {

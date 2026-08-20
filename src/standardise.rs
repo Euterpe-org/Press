@@ -40,7 +40,7 @@ use std::path::{Path, PathBuf};
 
 use crate::ffmpeg::{Cancel, Ffmpeg, Progress, Ran};
 use crate::gate::{self, Facts};
-use crate::plan::{self, Encode, Target};
+use crate::plan::{self, Encode, Target, Trim};
 
 /// Where a run has got to, for the window to render.
 #[derive(Debug, Clone, PartialEq)]
@@ -85,6 +85,9 @@ pub struct Produced {
     pub scaled_to: Option<(u32, u32)>,
     pub frame_rate_clamped: Option<u32>,
     pub trimmed_to: Option<f64>,
+    /// Seconds removed from the OPENING at the charter's request. Zero for
+    /// everything Press does on its own -- the automatic path never touches it.
+    pub opening_cut: f64,
     /// The AV1 comparison was stopped on request, so this result is the exact
     /// stream copy and might not be the smallest one available. Worth saying:
     /// the file is correct either way, but the charter chose not to find out.
@@ -112,7 +115,7 @@ pub fn standardise(
     ffmpeg: &Ffmpeg,
     source: &Path,
     output: &Path,
-    allowance: Option<f64>,
+    trim: Trim,
     cancel: &Cancel,
     mut on_step: impl FnMut(Step),
 ) -> Outcome {
@@ -127,7 +130,17 @@ pub fn standardise(
     };
     drop(bytes);
 
-    let target = plan::plan(&before, allowance);
+    let mut target = plan::plan(&before, trim.allowance(before.duration));
+
+    // An opening cut cannot be done by copying streams -- a copy can only start
+    // at a keyframe, seconds away from wherever the charter put the handle -- so
+    // asking for one removes the exact candidate from the contest entirely and
+    // the encode becomes the only path. See `plan::command_with_opening_cut`.
+    if trim.moves_the_opening() {
+        target.must_reencode = true;
+        target.may_try_av1 = false;
+    }
+
     if before.codec == Some("av1") && target.is_noop() && !before.has_audio {
         return Outcome::AlreadyStandard;
     }
@@ -213,12 +226,19 @@ pub fn standardise(
                 break;
             }
 
-            let cmd = plan::command(
-                &source_str,
-                &av1_path.to_string_lossy(),
-                &target,
-                Encode::Av1(crf),
-            );
+            let destination = av1_path.to_string_lossy();
+            let cmd = if trim.moves_the_opening() {
+                plan::command_with_opening_cut(
+                    &source_str,
+                    &destination,
+                    &target,
+                    crf,
+                    trim.cut_opening,
+                    target.trim_to,
+                )
+            } else {
+                plan::command(&source_str, &destination, &target, Encode::Av1(crf))
+            };
             let ran = ffmpeg.run(
                 &cmd,
                 Some(target.trim_to.unwrap_or(before.duration)),
@@ -334,6 +354,7 @@ pub fn standardise(
         scaled_to: target.size,
         frame_rate_clamped: target.fps,
         trimmed_to: target.trim_to,
+        opening_cut: trim.cut_opening,
         av1_cancelled,
     }))
 }

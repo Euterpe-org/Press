@@ -17,8 +17,10 @@ use eframe::egui;
 use crate::ffmpeg::{Cancel, Ffmpeg};
 use crate::gate::{self, Facts, Verdict, limits};
 use crate::i18n::{Lang, Text, text};
+use crate::plan::Trim;
 use crate::preview::Preview;
 use crate::standardise::{self, Outcome, Produced, Step, Treatment};
+use crate::timeline::Change;
 use crate::{fonts, theme};
 
 pub struct Press {
@@ -47,8 +49,9 @@ struct Loaded {
     preview: Option<Preview>,
     /// Where the scrubber is, in seconds.
     at: f64,
-    /// Everything past this point is dropped. `None` keeps the whole video.
-    trim_end: Option<f64>,
+    /// Which part of the source survives. Untouched by default: the opening is
+    /// never moved unless the charter moves it.
+    trim: Trim,
 }
 
 struct Working {
@@ -210,7 +213,7 @@ impl Press {
             verdict,
             preview,
             at: 0.0,
-            trim_end: None,
+            trim: Trim::default(),
         }));
     }
 
@@ -265,8 +268,9 @@ impl Press {
 
         let source = loaded.path.clone();
         let output = source.with_file_name("video.mp4");
-        let allowance = loaded.trim_end;
-        let forced = crate::plan::plan(&facts, allowance).must_reencode;
+        let trim = loaded.trim;
+        let forced = trim.moves_the_opening()
+            || crate::plan::plan(&facts, trim.allowance(facts.duration)).must_reencode;
         let cancel = Cancel::new();
         let (tx, inbox) = channel();
 
@@ -275,16 +279,10 @@ impl Press {
             let source = source.clone();
             move || {
                 let tx2 = tx.clone();
-                let outcome = standardise::standardise(
-                    &ffmpeg,
-                    &source,
-                    &output,
-                    allowance,
-                    &cancel,
-                    |step| {
+                let outcome =
+                    standardise::standardise(&ffmpeg, &source, &output, trim, &cancel, |step| {
                         let _ = tx2.send(Note::At(step));
-                    },
-                );
+                    });
                 let _ = tx.send(Note::Done(Box::new(outcome)));
             }
         });
@@ -632,25 +630,31 @@ fn findings(facts: &Facts, source_bytes: u64, lang: Lang) -> Vec<(String, String
     out
 }
 
-/// The timeline, with a handle for the end of the video.
-///
-/// The START handle is not here yet: moving it shifts the whole picture against
-/// the music and forces a re-encode, and both of those have to be said out loud
-/// in the interface before the control exists to do them.
+/// The timeline, the transport, and what the trim currently means in words.
 fn scrubber(ui: &mut egui::Ui, lang: Lang, loaded: &mut Loaded) {
     let Some(facts) = &loaded.facts else { return };
     let duration = facts.duration.max(0.001);
 
-    let mut at = loaded.at;
-    let response = ui.add(
-        egui::Slider::new(&mut at, 0.0..=duration)
-            .show_value(false)
-            .handle_shape(egui::style::HandleShape::Rect { aspect_ratio: 0.4 }),
-    );
-    if response.changed() {
-        loaded.at = at;
-        if let Some(preview) = &loaded.preview {
-            preview.seek(at);
+    match crate::timeline::timeline(ui, duration, loaded.at, &mut loaded.trim, true) {
+        Change::None => {}
+        Change::Seek(at) => {
+            loaded.at = at;
+            if let Some(preview) = &loaded.preview {
+                preview.seek(at);
+            }
+        }
+        // Dragging a handle moves the picture to that handle, because the frame
+        // being cut to is the entire reason to look at a preview at all.
+        Change::Trim { opening_moved } => {
+            let at = if opening_moved {
+                loaded.trim.cut_opening
+            } else {
+                loaded.trim.keep_until.unwrap_or(duration)
+            };
+            loaded.at = at;
+            if let Some(preview) = &loaded.preview {
+                preview.seek((at - 0.05).max(0.0));
+            }
         }
     }
 
@@ -668,27 +672,44 @@ fn scrubber(ui: &mut egui::Ui, lang: Lang, loaded: &mut Loaded) {
         theme::muted(ui, &format!("{} / {}", clock(loaded.at), clock(duration)));
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let mut end = loaded.trim_end.unwrap_or(duration);
-            let slider = ui.add(
-                egui::Slider::new(&mut end, 0.1..=duration)
-                    .text(text::TRIM_TITLE.get(lang))
-                    .custom_formatter(|v, _| clock(v)),
-            );
-            if slider.changed() {
-                loaded.trim_end = (end < duration - 0.05).then_some(end);
+            if !loaded.trim.is_untouched() && theme::quiet(ui, text::TRIM_RESET.get(lang)).clicked()
+            {
+                loaded.trim = Trim::default();
             }
         });
     });
 
-    match loaded.trim_end {
-        None => theme::muted(ui, text::TRIM_NONE.get(lang)),
-        Some(end) => theme::muted(
-            ui,
-            &text::TRIM_TAIL_ONLY
-                .get(lang)
-                .replace("{kept}", &clock(end))
-                .replace("{cut}", &clock(duration - end)),
-        ),
+    // What the handles currently mean, in words. The picture shows WHICH part
+    // survives; only a sentence can say what that costs.
+    if loaded.trim.is_untouched() {
+        theme::muted(ui, text::TRIM_NONE.get(lang));
+        return;
+    }
+
+    let kept = loaded.trim.kept_seconds(duration);
+    let cut = duration - kept;
+    theme::muted(
+        ui,
+        &text::TRIM_TAIL_ONLY
+            .get(lang)
+            .replace("{kept}", &clock(kept))
+            .replace("{cut}", &clock(cut)),
+    );
+
+    // The opening is the half with consequences, so it gets said in full and in
+    // the colour that means "read this", not tucked under the same grey line.
+    if loaded.trim.moves_the_opening() {
+        ui.add_space(4.0);
+        ui.label(
+            egui::RichText::new(
+                text::TRIM_HEAD_WARNING
+                    .get(lang)
+                    .replace("{shift}", &clock(loaded.trim.cut_opening)),
+            )
+            .size(theme::size::SMALL)
+            .color(theme::NOTICE),
+        );
+        theme::muted(ui, text::TRIM_HEAD_COSTS_REENCODE.get(lang));
     }
 }
 

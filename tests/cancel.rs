@@ -12,6 +12,7 @@
 use std::path::PathBuf;
 
 use euterpe_press::ffmpeg::{Cancel, Ffmpeg, Ran};
+use euterpe_press::plan::Trim;
 use euterpe_press::standardise::{self, Outcome};
 
 fn ffmpeg() -> Option<Ffmpeg> {
@@ -104,7 +105,8 @@ fn cancelling_a_forced_reencode_leaves_nothing_on_disk() {
     let cancel = Cancel::new();
     cancel.request();
 
-    let outcome = standardise::standardise(&ffmpeg, &source, &output, None, &cancel, |_| {});
+    let outcome =
+        standardise::standardise(&ffmpeg, &source, &output, Trim::default(), &cancel, |_| {});
     assert!(
         matches!(outcome, Outcome::Cancelled),
         "VP9 can only be fixed by re-encoding, so a cancel yields nothing: {outcome:?}"
@@ -135,13 +137,20 @@ fn cancelling_the_comparison_still_ships_the_exact_copy() {
     // progress block and the copy of a one-second file emits one) and the AV1
     // rung never starts.
     let cancel = Cancel::new();
-    let outcome = standardise::standardise(&ffmpeg, &source, &output, None, &cancel, |step| {
-        // The moment the copy is being verified, ask to stop. That is the real
-        // sequence: the user presses the button while the encode is queued.
-        if matches!(step, standardise::Step::Verifying) {
-            cancel.request();
-        }
-    });
+    let outcome = standardise::standardise(
+        &ffmpeg,
+        &source,
+        &output,
+        Trim::default(),
+        &cancel,
+        |step| {
+            // The moment the copy is being verified, ask to stop. That is the real
+            // sequence: the user presses the button while the encode is queued.
+            if matches!(step, standardise::Step::Verifying) {
+                cancel.request();
+            }
+        },
+    );
 
     match outcome {
         Outcome::Produced(produced) => {

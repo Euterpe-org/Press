@@ -17,3 +17,4 @@ pub mod plan;
 pub mod preview;
 pub mod standardise;
 pub mod theme;
+pub mod timeline;

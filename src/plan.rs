@@ -178,6 +178,128 @@ pub fn command(input: &str, output: &str, target: &Target, encode: Encode) -> Ve
     cmd
 }
 
+/// The recipe plus an opening cut -- something the server's round NEVER does.
+///
+/// K's red line is that the standardisation round only ever takes the tail: it
+/// touches charts belonging to other people, and shifting their opening against
+/// the music is damage nobody asked for. [`command`] therefore contains no
+/// `-ss` at all and a test asserts it never will.
+///
+/// This is the other case, and it is a different act. The charter is the author,
+/// looking at their own footage, deciding that its first two seconds are a slate
+/// that should not be there. Refusing them that is not caution, it is a tool
+/// deciding it knows their video better than they do. So the capability exists,
+/// in a function whose name says what it does, reachable only when someone has
+/// dragged the opening handle themselves.
+///
+/// Two consequences the window has to state out loud before anyone gets here:
+///
+/// * The picture ends up **earlier against the music** by exactly `cut_opening`.
+///   The mod keeps background video time-aligned with the song, so this is a
+///   deliberate desync and only right when the opening was never meant to line
+///   up.
+/// * **It always re-encodes.** A stream copy can only start at a keyframe -- two
+///   seconds apart in a typical H.264 export, five in AV1 -- so copying would
+///   either land somewhere the charter did not choose or leave a broken opening.
+///   Frame accuracy is worth the wait; guessing at seconds is not.
+///
+/// `-ss` sits AFTER `-i`, which decodes and discards up to the mark rather than
+/// jumping to the nearest keyframe. Slower, and exact.
+pub fn command_with_opening_cut(
+    input: &str,
+    output: &str,
+    target: &Target,
+    crf: u32,
+    cut_opening: f64,
+    keep_seconds: Option<f64>,
+) -> Vec<String> {
+    debug_assert!(
+        cut_opening > 0.0,
+        "an opening cut of zero belongs in `command`"
+    );
+
+    let mut cmd: Vec<String> = ["ffmpeg", "-y", "-loglevel", "error", "-i", input]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+
+    cmd.push("-ss".to_owned());
+    cmd.push(format!("{cut_opening:.3}"));
+    if let Some(keep) = keep_seconds {
+        cmd.push("-t".to_owned());
+        cmd.push(format!("{keep:.3}"));
+    }
+
+    let mut filters = Vec::new();
+    if let Some((w, h)) = target.size {
+        filters.push(format!("scale={w}:{h}:flags=lanczos"));
+    }
+    if let Some(fps) = target.fps {
+        filters.push(format!("fps={fps}"));
+    }
+    if !filters.is_empty() {
+        cmd.push("-vf".to_owned());
+        cmd.push(filters.join(","));
+    }
+    for arg in ["-c:v", "libsvtav1", "-crf"] {
+        cmd.push(arg.to_owned());
+    }
+    cmd.push(crf.to_string());
+    cmd.push("-preset".to_owned());
+    cmd.push(PRESET.to_string());
+    cmd.push("-pix_fmt".to_owned());
+    cmd.push("yuv420p".to_owned());
+
+    for arg in ["-an", "-movflags", "+faststart", output] {
+        cmd.push(arg.to_owned());
+    }
+    cmd
+}
+
+/// What the charter asked for on the timeline.
+///
+/// Separate from [`Target`] on purpose. `Target` is the SERVER's decision,
+/// pinned scenario by scenario against its own planner; this is the one thing
+/// Press decides for itself, and keeping them apart is what stops an authored
+/// choice from drifting into the part that has to match.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Trim {
+    /// Seconds removed from the OPENING. Zero leaves it alone, and zero is the
+    /// default -- this one is never chosen for the charter.
+    pub cut_opening: f64,
+    /// Where the kept region ends, measured from the start of the SOURCE.
+    /// `None` keeps everything to the end.
+    pub keep_until: Option<f64>,
+}
+
+impl Trim {
+    pub fn is_untouched(&self) -> bool {
+        self.cut_opening <= 0.0 && self.keep_until.is_none()
+    }
+
+    /// True when the opening moves, which forces a re-encode.
+    pub fn moves_the_opening(&self) -> bool {
+        self.cut_opening > 0.0
+    }
+
+    /// How long the result runs.
+    pub fn kept_seconds(&self, source_duration: f64) -> f64 {
+        (self.keep_until.unwrap_or(source_duration) - self.cut_opening).max(0.0)
+    }
+
+    /// The value [`plan`] wants: a maximum length for the OUTPUT, or `None`.
+    ///
+    /// With no opening cut this is simply where the tail stops. With one, the
+    /// output is shorter than the source by the cut as well, and `plan` is being
+    /// asked only whether a trim happens at all.
+    pub fn allowance(&self, source_duration: f64) -> Option<f64> {
+        if self.is_untouched() {
+            return None;
+        }
+        Some(self.kept_seconds(source_duration))
+    }
+}
+
 /// Progress reporting, spliced in by the runner rather than baked into
 /// [`command`].
 ///
