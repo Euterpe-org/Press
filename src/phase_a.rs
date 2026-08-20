@@ -208,7 +208,7 @@ pub fn run(
             // A copy changes neither the frame size nor the codec, so both are
             // held to exactly what went in. Anything else means `-c copy` did
             // not do what `-c copy` does.
-            size: (facts.width, facts.height),
+            size: facts.picture(),
             codec: facts.codec,
             seconds,
             // Absolute for a trim, relative for a whole file: a second of slack

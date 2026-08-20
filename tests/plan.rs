@@ -100,6 +100,11 @@ fn facts_of(f: &ScenarioFacts) -> Facts {
         fps: f.fps,
         duration: f.duration,
         has_audio: f.has_audio,
+        // The golden corpus is the server's probe, which has no opinion about
+        // the display matrix -- it rations a pixel count. Nothing in this file
+        // asks about the picture's orientation, so the flat answer is the
+        // truthful one here.
+        quarter_turned: false,
     }
 }
 

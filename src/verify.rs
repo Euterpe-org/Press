@@ -86,7 +86,7 @@ pub fn judge(path: &Path, expect: &Expect) -> Result<Checked, Broken> {
         ));
     }
 
-    if (facts.width, facts.height) != expect.size {
+    if facts.picture() != expect.size {
         return broken(format!(
             "the result is {}x{}, expected {}x{}",
             facts.width, facts.height, expect.size.0, expect.size.1

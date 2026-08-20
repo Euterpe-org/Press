@@ -103,6 +103,36 @@ pub struct Facts {
     pub duration: f64,
     /// A background video's audio is never played: the game plays `music.ogg`.
     pub has_audio: bool,
+    /// The track carries a display matrix that turns the picture a quarter turn.
+    ///
+    /// The gate has no opinion about this -- it rations a pixel COUNT, and a
+    /// count does not care which of its two factors is called the width. Press
+    /// does: ffmpeg auto-rotates on decode, so every frame it hands back has the
+    /// axes the other way round from what `stsd` says, and asking for the coded
+    /// size back is asking for a picture that will not arrive.
+    pub quarter_turned: bool,
+}
+
+impl Facts {
+    /// The frame as ffmpeg will actually hand it over.
+    ///
+    /// Everything about the PICTURE goes through here -- the crop window, the
+    /// scale target, the size an encode is verified against, the box the
+    /// viewfinder is drawn in. `width`/`height` stay exactly what the server's
+    /// probe reads, because that is what the golden corpus pins them to.
+    ///
+    /// Without this a phone-shot clip failed after a full encode had been paid
+    /// for: Press asked for 320x180 back, ffmpeg produced the 180x320 the
+    /// display matrix called for, and `verify` reported the correct file as
+    /// broken. A crop was worse -- the window was computed for the wrong axis
+    /// and ffmpeg refused the filter outright.
+    pub fn picture(&self) -> (u32, u32) {
+        if self.quarter_turned {
+            (self.height, self.width)
+        } else {
+            (self.width, self.height)
+        }
+    }
 }
 
 #[derive(Default, Clone)]
@@ -114,6 +144,7 @@ struct Track {
     ticks: Option<u128>,
     width: Option<u32>,
     height: Option<u32>,
+    quarter_turned: bool,
     stts_samples: u128,
     stts_ticks: u128,
 }
@@ -295,12 +326,35 @@ impl<'a> Walker<'a> {
         let id = self.u32(o);
         let slot = self.cur.expect("checked above");
         self.slots[slot].id = Some(id);
+        self.slots[slot].quarter_turned = self.quarter_turn(o, ver, stop);
         // Python's `self.tracks[tid] = self.cur`: an existing id is REPLACED and
         // keeps its original iteration position.
         match self.registry.iter_mut().find(|(t, _)| *t == id) {
             Some(entry) => entry.1 = slot,
             None => self.registry.push((id, slot)),
         }
+    }
+
+    /// Does `tkhd`'s display matrix turn the picture onto its side?
+    ///
+    /// `o` is where the track id starts, so the matrix is past the id, the
+    /// reserved word, the duration (whose width is the version's), and then
+    /// sixteen bytes of reserved/layer/alternate_group/volume.
+    ///
+    /// Only ONE bit of the matrix is wanted. It is a 3x3 of 16.16 fixed point,
+    /// and a quarter turn -- 90 or 270 -- is exactly the case where the two
+    /// diagonal terms are zero and the two off-diagonal ones are not. A half
+    /// turn leaves the axes alone, and an arbitrary affine is not something any
+    /// camera or editor writes; both are correctly read as "not turned".
+    fn quarter_turn(&self, o: usize, ver: u8, stop: usize) -> bool {
+        let after_duration = o + 4 + 4 + if ver == 1 { 8 } else { 4 };
+        let matrix = after_duration + 16;
+        if matrix + 20 > stop {
+            return false;
+        }
+        let (a, b) = (self.u32(matrix), self.u32(matrix + 4));
+        let (c, d) = (self.u32(matrix + 12), self.u32(matrix + 16));
+        a == 0 && d == 0 && b != 0 && c != 0
     }
 
     fn mdhd(&mut self, body: usize, stop: usize) {
@@ -603,6 +657,7 @@ pub fn probe(data: &[u8]) -> Option<Facts> {
         fps: samples as f64 / duration,
         duration,
         has_audio,
+        quarter_turned: w.slots[vid].quarter_turned,
     })
 }
 

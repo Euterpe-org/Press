@@ -116,7 +116,7 @@ impl Target {
 pub fn plan(facts: &Facts, allowance: Option<f64>, crop: Option<crop::Window>) -> Target {
     let (width, height) = match crop {
         Some(window) => (window.width, window.height),
-        None => (facts.width, facts.height),
+        None => facts.picture(),
     };
 
     let pixels = u64::from(width) * u64::from(height);
