@@ -11,4 +11,5 @@
 pub mod ffmpeg;
 pub mod gate;
 pub mod plan;
+pub mod preview;
 pub mod standardise;
