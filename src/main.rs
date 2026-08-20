@@ -1,38 +1,104 @@
-//! Temporary command line, until the window exists.
+//! Two ways in, and the same answer from both.
 //!
-//! Kept afterwards regardless: the gate answering from a terminal is how a batch
-//! of files gets checked without a drag-and-drop each, and how a release can be
-//! proved to agree with the server rather than only the test harness doing so.
+//! Started with no arguments, Press opens a window: that is the product. Given
+//! files, it answers from the terminal instead -- which is how a batch gets
+//! checked without a drag-and-drop each, and how a release can be proved to
+//! agree with the server rather than only the test harness doing so.
+
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use euterpe_press::app::Press;
 use euterpe_press::ffmpeg::Ffmpeg;
 use euterpe_press::gate::{self, Verdict};
+use euterpe_press::i18n::{Lang, text};
 use euterpe_press::standardise::{self, Outcome, Step, Treatment};
 
 fn main() -> ExitCode {
-    let mut fix = false;
+    let mut terminal = None;
     let mut files: Vec<PathBuf> = Vec::new();
     for arg in std::env::args_os().skip(1) {
-        if arg == "--fix" {
-            fix = true;
-        } else {
-            files.push(PathBuf::from(arg));
+        match arg.to_str() {
+            Some("--check") => terminal = Some(false),
+            Some("--fix") => terminal = Some(true),
+            _ => files.push(PathBuf::from(arg)),
         }
     }
 
+    // Bare file arguments open the WINDOW with that file loaded, because that is
+    // what dropping a video on the exe -- or opening one "with" Press -- means to
+    // the person doing it. A release build has no console attached
+    // (`windows_subsystem = "windows"`), so answering that gesture on stdout
+    // would print into nowhere and look like nothing happened at all.
+    let Some(repair_them) = terminal else {
+        return match window(files.into_iter().next()) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("the window could not be opened: {error}");
+                ExitCode::FAILURE
+            }
+        };
+    };
+
     if files.is_empty() {
-        eprintln!("usage: euterpe-press [--fix] <video.mp4> [...]");
-        eprintln!("       without --fix, reports the verdict and changes nothing");
+        eprintln!("usage: euterpe-press [--check | --fix] <video.mp4> [...]");
+        eprintln!("       with no flag and no files, opens the window");
         return ExitCode::from(2);
     }
 
     let mut bad = false;
     for path in &files {
-        bad |= if fix { repair(path) } else { report(path) };
+        bad |= if repair_them { repair(path) } else { report(path) };
     }
-    if bad { ExitCode::FAILURE } else { ExitCode::SUCCESS }
+    if bad {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+
+fn window(open: Option<PathBuf>) -> eframe::Result {
+    let lang = Lang::from_system();
+    let ffmpeg = encoder();
+
+    let options = eframe::NativeOptions {
+        viewport: eframe::egui::ViewportBuilder::default()
+            .with_inner_size([720.0, 860.0])
+            .with_min_inner_size([560.0, 640.0])
+            .with_drag_and_drop(true)
+            .with_title(text::WINDOW_TITLE.get(lang)),
+        ..Default::default()
+    };
+
+    eframe::run_native(
+        text::WINDOW_TITLE.get(lang),
+        options,
+        Box::new(move |cc| {
+            let mut press = Press::new(&cc.egui_ctx, lang, ffmpeg);
+            if let Some(path) = open {
+                press.open(&path);
+            }
+            Ok(Box::new(press))
+        }),
+    )
+}
+
+/// The encoder Press will run, or `None` if this build has none to run.
+///
+/// Development uses whatever is on PATH. A release carries its own and will
+/// resolve it here instead: a machine's stray ffmpeg must never be able to
+/// change what Press produces, because two builds disagreeing about one chart is
+/// exactly what using the server's recipe exists to prevent.
+fn encoder() -> Option<Ffmpeg> {
+    let usable = std::process::Command::new("ffmpeg")
+        .arg("-version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success());
+    usable.then(Ffmpeg::on_path)
 }
 
 /// Read-only: what would the server say?
@@ -79,9 +145,17 @@ fn repair(path: &Path) -> bool {
         let line = match step {
             Step::Reading => "reading".to_owned(),
             Step::Copying(p) => format!("stream copy {}", percent(p.and_then(|p| p.fraction))),
-            Step::Encoding { crf, attempt, progress } => format!(
+            Step::Encoding {
+                crf,
+                attempt,
+                progress,
+            } => format!(
                 "av1 crf {crf}{} {}",
-                if attempt > 1 { format!(" (attempt {attempt})") } else { String::new() },
+                if attempt > 1 {
+                    format!(" (attempt {attempt})")
+                } else {
+                    String::new()
+                },
                 percent(progress.and_then(|p| p.fraction)),
             ),
             Step::Verifying => "verifying".to_owned(),
@@ -149,7 +223,10 @@ fn percent(fraction: Option<f64>) -> String {
 }
 
 fn name(path: &Path) -> String {
-    path.file_name().unwrap_or(path.as_os_str()).to_string_lossy().into_owned()
+    path.file_name()
+        .unwrap_or(path.as_os_str())
+        .to_string_lossy()
+        .into_owned()
 }
 
 fn shape(facts: Option<&gate::Facts>) -> String {
@@ -157,7 +234,11 @@ fn shape(facts: Option<&gate::Facts>) -> String {
         None => "unreadable".to_owned(),
         Some(f) => format!(
             "{} {}x{} {:.2}fps {:.1}s{}",
-            f.codec.unwrap_or(if f.raw_fourcc.is_empty() { "?" } else { &f.raw_fourcc }),
+            f.codec.unwrap_or(if f.raw_fourcc.is_empty() {
+                "?"
+            } else {
+                &f.raw_fourcc
+            }),
             f.width,
             f.height,
             f.fps,
@@ -178,7 +259,12 @@ fn describe(verdict: &Verdict) -> String {
         }
         Verdict::Invalid => "INVALID_VIDEO".to_owned(),
         Verdict::FormatUnsupported { codec } => format!("VIDEO_FORMAT_UNSUPPORTED ({codec})"),
-        Verdict::ResolutionTooHigh { width, height, max_width, max_height } => format!(
+        Verdict::ResolutionTooHigh {
+            width,
+            height,
+            max_width,
+            max_height,
+        } => format!(
             "VIDEO_RESOLUTION_TOO_HIGH ({width}x{height}, limit {max_width}x{max_height} of pixels)"
         ),
         Verdict::FpsTooHigh { fps, limit } => format!("VIDEO_FPS_TOO_HIGH ({fps}, limit {limit})"),

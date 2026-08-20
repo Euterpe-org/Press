@@ -30,13 +30,26 @@ pub enum Verdict {
     /// Megabytes, both already rounded UP. A file one byte over the limit rounds
     /// DOWN to it, and "your video is 80 MB, the limit is 80 MB" reads as a bug
     /// in the gate rather than as a fact about the file.
-    TooLarge { size_mb: u64, limit_mb: u64 },
+    TooLarge {
+        size_mb: u64,
+        limit_mb: u64,
+    },
     /// Not an MP4, no video track, truncated, or no usable timing. One outcome
     /// on purpose: they all mean "re-export as a standard MP4".
     Invalid,
-    FormatUnsupported { codec: String },
-    ResolutionTooHigh { width: u32, height: u32, max_width: u32, max_height: u32 },
-    FpsTooHigh { fps: i64, limit: u32 },
+    FormatUnsupported {
+        codec: String,
+    },
+    ResolutionTooHigh {
+        width: u32,
+        height: u32,
+        max_width: u32,
+        max_height: u32,
+    },
+    FpsTooHigh {
+        fps: i64,
+        limit: u32,
+    },
     HasAudio,
 }
 

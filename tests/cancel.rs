@@ -36,7 +36,9 @@ fn scratch(name: &str) -> PathBuf {
 }
 
 fn fixture(name: &str) -> PathBuf {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(name)
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name)
 }
 
 /// A token already set when the run starts stops it at the first progress
@@ -53,10 +55,24 @@ fn a_cancelled_run_is_not_reported_as_a_failure() {
     // Thirty seconds of synthetic video at the slowest useful preset: long
     // enough that the cancel lands mid-encode on any machine.
     let args: Vec<String> = [
-        "ffmpeg", "-y", "-loglevel", "error",
-        "-f", "lavfi", "-i", "testsrc2=size=1280x720:rate=30:duration=30",
-        "-c:v", "libsvtav1", "-crf", "32", "-preset", "4", "-pix_fmt", "yuv420p",
-        "-an", &output.to_string_lossy(),
+        "ffmpeg",
+        "-y",
+        "-loglevel",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc2=size=1280x720:rate=30:duration=30",
+        "-c:v",
+        "libsvtav1",
+        "-crf",
+        "32",
+        "-preset",
+        "4",
+        "-pix_fmt",
+        "yuv420p",
+        "-an",
+        &output.to_string_lossy(),
     ]
     .iter()
     .map(|s| (*s).to_owned())
@@ -65,7 +81,9 @@ fn a_cancelled_run_is_not_reported_as_a_failure() {
     let cancel = Cancel::new();
     cancel.request();
 
-    let ran = ffmpeg.run(&args, Some(30.0), &cancel, |_| {}).expect("not a failure");
+    let ran = ffmpeg
+        .run(&args, Some(30.0), &cancel, |_| {})
+        .expect("not a failure");
     assert_eq!(ran, Ran::Cancelled);
 
     let _ = std::fs::remove_file(&output);
@@ -127,7 +145,10 @@ fn cancelling_the_comparison_still_ships_the_exact_copy() {
 
     match outcome {
         Outcome::Produced(produced) => {
-            assert!(produced.av1_cancelled, "the comparison was cancelled and should say so");
+            assert!(
+                produced.av1_cancelled,
+                "the comparison was cancelled and should say so"
+            );
             assert!(produced.audio_dropped, "the audio track was the violation");
             assert_eq!(produced.treatment, standardise::Treatment::StreamCopy);
             assert!(output.exists(), "the compliant copy is the result");

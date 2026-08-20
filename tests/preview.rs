@@ -29,7 +29,9 @@ fn ffmpeg_path() -> Option<PathBuf> {
 }
 
 fn fixture(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(name)
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name)
 }
 
 /// Waits for the decoder to hand over a frame, or gives up.
@@ -56,7 +58,11 @@ fn a_frame_comes_back_at_the_size_it_was_asked_for() {
     let Some(ffmpeg) = ffmpeg_path() else { return };
 
     let preview = Preview::open(&ffmpeg, &fixture("plain_h264.mp4"), 320, 180);
-    assert_eq!(preview.size(), (320, 180), "already inside the cap, so unscaled");
+    assert_eq!(
+        preview.size(),
+        (320, 180),
+        "already inside the cap, so unscaled"
+    );
 
     preview.seek(0.5);
     let frame = await_frame(&preview);
@@ -67,7 +73,10 @@ fn a_frame_comes_back_at_the_size_it_was_asked_for() {
         320 * 180 * 4,
         "a short read is a torn frame, and a torn frame looks like a broken source"
     );
-    assert!(!is_flat(&frame.rgba), "the fixture has content; a flat frame means it was not decoded");
+    assert!(
+        !is_flat(&frame.rgba),
+        "the fixture has content; a flat frame means it was not decoded"
+    );
 }
 
 /// The whole reason the viewfinder is built on the encoder rather than on a
@@ -121,7 +130,10 @@ fn playing_to_the_end_reports_that_it_ended() {
         std::thread::sleep(Duration::from_millis(20));
     }
     assert!(preview.ended(), "a one-second source should have finished");
-    assert!(!preview.playing(), "and should no longer report itself as playing");
+    assert!(
+        !preview.playing(),
+        "and should no longer report itself as playing"
+    );
 }
 
 /// Dropping the preview has to stop the decoder. A viewfinder that leaves an

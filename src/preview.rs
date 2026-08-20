@@ -95,7 +95,12 @@ impl Preview {
             move || decode_loop(&ffmpeg, &source, size, &shared, &inbox)
         });
 
-        Self { shared, commands, size, worker: Some(worker) }
+        Self {
+            shared,
+            commands,
+            size,
+            worker: Some(worker),
+        }
     }
 
     /// The frame size every [`Frame`] will carry.
@@ -151,7 +156,10 @@ pub fn preview_size(width: u32, height: u32, max_edge: u32) -> (u32, u32) {
         return (even(width), even(height));
     }
     let scale = f64::from(max_edge) / f64::from(longest);
-    (even((f64::from(width) * scale) as u32), even((f64::from(height) * scale) as u32))
+    (
+        even((f64::from(width) * scale) as u32),
+        even((f64::from(height) * scale) as u32),
+    )
 }
 
 fn even(value: u32) -> u32 {
@@ -256,7 +264,12 @@ impl Decoder {
         command
             .arg("-i")
             .arg(source)
-            .args(["-an", "-sn", "-vf", &format!("scale={w}:{h}:flags=bilinear")])
+            .args([
+                "-an",
+                "-sn",
+                "-vf",
+                &format!("scale={w}:{h}:flags=bilinear"),
+            ])
             .args(["-f", "rawvideo", "-pix_fmt", "rgba"]);
         if !realtime {
             command.args(["-frames:v", "1"]);
@@ -292,7 +305,12 @@ impl Decoder {
         }
         let pts = self.next_pts;
         self.next_pts += self.frame_step;
-        Some(Frame { width: self.size.0, height: self.size.1, rgba: Arc::new(rgba), pts })
+        Some(Frame {
+            width: self.size.0,
+            height: self.size.1,
+            rgba: Arc::new(rgba),
+            pts,
+        })
     }
 }
 
@@ -325,7 +343,13 @@ mod tests {
     /// after the first is torn.
     #[test]
     fn preview_frames_are_always_even() {
-        for (w, h) in [(1920, 1080), (1080, 1920), (1281, 721), (3840, 2160), (7, 3)] {
+        for (w, h) in [
+            (1920, 1080),
+            (1080, 1920),
+            (1281, 721),
+            (3840, 2160),
+            (7, 3),
+        ] {
             let (pw, ph) = preview_size(w, h, MAX_EDGE);
             assert_eq!(pw % 2, 0, "{w}x{h} -> {pw}x{ph}");
             assert_eq!(ph % 2, 0, "{w}x{h} -> {pw}x{ph}");

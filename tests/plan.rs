@@ -120,8 +120,16 @@ fn the_recipe_constants_match_what_was_last_recorded() {
     let c = recipe().constants;
     assert_eq!(plan::CRF, c.CRF, "CRF");
     assert_eq!(plan::PRESET, c.PRESET, "preset");
-    assert_eq!(plan::CRF_ESCALATION.to_vec(), c.CRF_ESCALATION, "CRF escalation ladder");
-    assert_eq!(plan::LOSSLESS_GROWTH_MARGIN, c.LOSSLESS_GROWTH_MARGIN, "growth margin");
+    assert_eq!(
+        plan::CRF_ESCALATION.to_vec(),
+        c.CRF_ESCALATION,
+        "CRF escalation ladder"
+    );
+    assert_eq!(
+        plan::LOSSLESS_GROWTH_MARGIN,
+        c.LOSSLESS_GROWTH_MARGIN,
+        "growth margin"
+    );
     assert_eq!(plan::TRIM_TOLERANCE, c.TRIM_TOLERANCE, "trim tolerance");
 }
 
@@ -135,10 +143,17 @@ fn every_scenario_is_planned_the_way_the_server_plans_it() {
         let got = plan::plan(&facts_of(&scenario.facts), scenario.allowance);
         let want = &scenario.target;
 
-        assert_eq!(got.size.map(|(w, h)| vec![w, h]), want.size, "{name}: frame size");
+        assert_eq!(
+            got.size.map(|(w, h)| vec![w, h]),
+            want.size,
+            "{name}: frame size"
+        );
         assert_eq!(got.fps, want.fps, "{name}: frame rate");
         assert_eq!(got.trim_to, want.trim_to, "{name}: trim");
-        assert_eq!(got.must_reencode, want.must_reencode, "{name}: re-encode forced");
+        assert_eq!(
+            got.must_reencode, want.must_reencode,
+            "{name}: re-encode forced"
+        );
         assert_eq!(got.may_try_av1, want.may_try_av1, "{name}: AV1 offered");
         assert_eq!(got.is_noop(), want.is_noop, "{name}: is_noop");
     }
@@ -182,14 +197,23 @@ fn all_commands() -> Vec<(String, Target, Encode, Vec<String>)> {
 #[test]
 fn the_trim_can_only_ever_take_the_tail() {
     for (name, target, encode, cmd) in all_commands() {
-        assert!(!has(&cmd, "-ss"), "{name}/{encode:?}: -ss must never appear: {cmd:?}");
+        assert!(
+            !has(&cmd, "-ss"),
+            "{name}/{encode:?}: -ss must never appear: {cmd:?}"
+        );
 
         match target.trim_to {
-            None => assert!(!has(&cmd, "-t"), "{name}/{encode:?}: -t with nothing to trim"),
+            None => assert!(
+                !has(&cmd, "-t"),
+                "{name}/{encode:?}: -t with nothing to trim"
+            ),
             Some(_) => {
                 let t = index_of(&cmd, "-t").expect("a trim must be asked for");
                 let i = index_of(&cmd, "-i").expect("there is always an input");
-                assert!(t > i, "{name}/{encode:?}: -t before -i is an input seek: {cmd:?}");
+                assert!(
+                    t > i,
+                    "{name}/{encode:?}: -t before -i is an input seek: {cmd:?}"
+                );
             }
         }
     }
@@ -218,7 +242,10 @@ fn the_copy_path_never_touches_the_picture() {
 
         assert!(has(&cmd, "-c") && has(&cmd, "copy"), "{name}: {cmd:?}");
         for forbidden in ["-vf", "-crf", "-c:v", "-preset", "-pix_fmt"] {
-            assert!(!has(&cmd, forbidden), "{name}: copy path carries {forbidden}: {cmd:?}");
+            assert!(
+                !has(&cmd, forbidden),
+                "{name}: copy path carries {forbidden}: {cmd:?}"
+            );
         }
     }
 }
@@ -233,18 +260,29 @@ fn a_reencode_clamps_what_the_plan_asked_for() {
         let cmd = plan::command("IN.mp4", "OUT.mp4", &target, Encode::Av1(plan::CRF));
         let name = &scenario.name;
 
-        assert!(has(&cmd, "-c:v") && has(&cmd, "libsvtav1"), "{name}: {cmd:?}");
+        assert!(
+            has(&cmd, "-c:v") && has(&cmd, "libsvtav1"),
+            "{name}: {cmd:?}"
+        );
 
-        let filters = index_of(&cmd, "-vf").map(|i| cmd[i + 1].clone()).unwrap_or_default();
+        let filters = index_of(&cmd, "-vf")
+            .map(|i| cmd[i + 1].clone())
+            .unwrap_or_default();
         match target.size {
-            None => assert!(!filters.contains("scale="), "{name}: scaling nothing: {filters}"),
+            None => assert!(
+                !filters.contains("scale="),
+                "{name}: scaling nothing: {filters}"
+            ),
             Some((w, h)) => assert!(
                 filters.contains(&format!("scale={w}:{h}")),
                 "{name}: expected scale={w}:{h} in {filters:?}"
             ),
         }
         match target.fps {
-            None => assert!(!filters.contains("fps="), "{name}: clamping nothing: {filters}"),
+            None => assert!(
+                !filters.contains("fps="),
+                "{name}: clamping nothing: {filters}"
+            ),
             Some(fps) => assert!(
                 filters.contains(&format!("fps={fps}")),
                 "{name}: expected fps={fps} in {filters:?}"
@@ -258,7 +296,11 @@ fn a_reencode_clamps_what_the_plan_asked_for() {
 #[test]
 fn the_output_is_the_last_argument() {
     for (name, _, encode, cmd) in all_commands() {
-        assert_eq!(cmd.last().map(String::as_str), Some("OUT.mp4"), "{name}/{encode:?}");
+        assert_eq!(
+            cmd.last().map(String::as_str),
+            Some("OUT.mp4"),
+            "{name}/{encode:?}"
+        );
     }
 }
 
@@ -269,7 +311,10 @@ fn the_output_is_the_last_argument() {
 fn progress_flags_are_not_part_of_the_recipe() {
     for (name, _, encode, cmd) in all_commands() {
         for flag in plan::PROGRESS_FLAGS {
-            assert!(!has(&cmd, flag), "{name}/{encode:?}: {flag} leaked into the recipe");
+            assert!(
+                !has(&cmd, flag),
+                "{name}/{encode:?}: {flag} leaked into the recipe"
+            );
         }
     }
 }

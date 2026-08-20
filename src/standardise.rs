@@ -51,7 +51,11 @@ pub enum Step {
     Copying(Option<Progress>),
     /// The competing one. `attempt` counts from 1 and only advances when the
     /// result did not fit under the size limit.
-    Encoding { crf: u32, attempt: usize, progress: Option<Progress> },
+    Encoding {
+        crf: u32,
+        attempt: usize,
+        progress: Option<Progress>,
+    },
     /// Re-reading the candidates through the gate.
     Verifying,
 }
@@ -129,18 +133,29 @@ pub fn standardise(
     }
 
     let scratch = output.parent().unwrap_or(Path::new("."));
-    let stem = output.file_stem().and_then(|s| s.to_str()).unwrap_or("video");
+    let stem = output
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("video");
     let copy_path = scratch.join(format!(".{stem}.copy.mp4"));
     let av1_path = scratch.join(format!(".{stem}.av1.mp4"));
     let source_str = source.to_string_lossy().into_owned();
 
-    let verify = Verify { before: &before, target: &target };
+    let verify = Verify {
+        before: &before,
+        target: &target,
+    };
     let mut candidates: Vec<Candidate> = Vec::new();
 
     // ── the exact candidate ──────────────────────────────────────────────
     // Only possible when nothing about the geometry has to move.
     if !target.must_reencode {
-        let cmd = plan::command(&source_str, &copy_path.to_string_lossy(), &target, Encode::Copy);
+        let cmd = plan::command(
+            &source_str,
+            &copy_path.to_string_lossy(),
+            &target,
+            Encode::Copy,
+        );
         match ffmpeg.run(&cmd, Some(before.duration), cancel, |p| {
             on_step(Step::Copying(Some(p)));
         }) {
@@ -198,11 +213,24 @@ pub fn standardise(
                 break;
             }
 
-            let cmd =
-                plan::command(&source_str, &av1_path.to_string_lossy(), &target, Encode::Av1(crf));
-            let ran = ffmpeg.run(&cmd, Some(target.trim_to.unwrap_or(before.duration)), cancel, |p| {
-                on_step(Step::Encoding { crf, attempt: attempt + 1, progress: Some(p) });
-            });
+            let cmd = plan::command(
+                &source_str,
+                &av1_path.to_string_lossy(),
+                &target,
+                Encode::Av1(crf),
+            );
+            let ran = ffmpeg.run(
+                &cmd,
+                Some(target.trim_to.unwrap_or(before.duration)),
+                cancel,
+                |p| {
+                    on_step(Step::Encoding {
+                        crf,
+                        attempt: attempt + 1,
+                        progress: Some(p),
+                    });
+                },
+            );
             match ran {
                 Err(error) => {
                     last_error = Some(error);
@@ -383,7 +411,10 @@ impl Verify<'_> {
             return Err(format!("the result would be refused: {}", verdict.code()));
         }
 
-        let wanted_size = self.target.size.unwrap_or((self.before.width, self.before.height));
+        let wanted_size = self
+            .target
+            .size
+            .unwrap_or((self.before.width, self.before.height));
         if (after.width, after.height) != wanted_size {
             return Err(format!(
                 "the result is {}x{}, expected {}x{}",
@@ -414,7 +445,12 @@ impl Verify<'_> {
             }
         }
 
-        Ok(Candidate { path: path.to_path_buf(), bytes: size, facts: after, encode })
+        Ok(Candidate {
+            path: path.to_path_buf(),
+            bytes: size,
+            facts: after,
+            encode,
+        })
     }
 }
 

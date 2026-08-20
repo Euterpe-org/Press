@@ -3,13 +3,17 @@
 //! A charter drags an MP4 in and is told, in their own language, whether
 //! euterpe-org.com will accept it -- and if not, gets a file that it will.
 //!
-//! The library half is deliberately free of any UI: `gate` decides, and nothing
-//! in it reads a file, opens a window or spawns a process. That is what lets the
-//! verdict be tested against the server's own answers on seventeen fixtures
-//! (`tests/gate.rs`) instead of against a screenshot.
+//! `gate` and `plan` are deliberately free of any UI and of any I/O: they take
+//! bytes and facts and return verdicts and commands. That is what lets them be
+//! tested against the server's own answers -- twenty-one fixtures and thirteen
+//! planning scenarios -- rather than against a screenshot.
 
+pub mod app;
 pub mod ffmpeg;
+pub mod fonts;
 pub mod gate;
+pub mod i18n;
 pub mod plan;
 pub mod preview;
 pub mod standardise;
+pub mod theme;

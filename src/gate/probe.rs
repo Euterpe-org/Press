@@ -49,21 +49,22 @@ pub fn codec_of(fourcc: &[u8; 4]) -> Option<&'static str> {
 /// the background video, and treating it as one would refuse a good file for the
 /// codec of its thumbnail.
 const KNOWN_VIDEO: [&[u8; 4]; 12] = [
-    b"avc1", b"avc3", b"hev1", b"hvc1", b"av01",
-    b"vp08", b"vp09", b"mp4v", b"dvh1", b"dvhe", b"vc-1", b"s263",
+    b"avc1", b"avc3", b"hev1", b"hvc1", b"av01", b"vp08", b"vp09", b"mp4v", b"dvh1", b"dvhe",
+    b"vc-1", b"s263",
 ];
 
 /// Sample entries that mark a track as AUDIO when its handler is missing or odd.
 /// The handler (`soun`) is the primary test; this is the same second witness the
 /// video side gets.
 const KNOWN_AUDIO: [&[u8; 4]; 11] = [
-    b"mp4a", b"ac-3", b"ec-3", b"alac", b"Opus", b"fLaC", b".mp3",
-    b"samr", b"sowt", b"twos", b"lpcm",
+    b"mp4a", b"ac-3", b"ec-3", b"alac", b"Opus", b"fLaC", b".mp3", b"samr", b"sowt", b"twos",
+    b"lpcm",
 ];
 
 /// Containers worth descending into. Anything else is skipped whole.
-const CONTAINERS: [&[u8; 4]; 8] =
-    [b"moov", b"trak", b"mdia", b"minf", b"stbl", b"mvex", b"moof", b"traf"];
+const CONTAINERS: [&[u8; 4]; 8] = [
+    b"moov", b"trak", b"mdia", b"minf", b"stbl", b"mvex", b"moof", b"traf",
+];
 
 /// A malformed file must cost a bounded amount of work, not an unbounded one.
 const MAX_DEPTH: u32 = 8;
@@ -427,9 +428,12 @@ impl<'a> Walker<'a> {
                 added_ticks += u128::from(self.u32(o + i * stride));
             }
         } else {
-            let step = self
-                .traf_default
-                .or_else(|| self.trex.iter().find(|(t, _)| *t == track_id).map(|(_, d)| *d));
+            let step = self.traf_default.or_else(|| {
+                self.trex
+                    .iter()
+                    .find(|(t, _)| *t == track_id)
+                    .map(|(_, d)| *d)
+            });
             // Python: `if step:` -- a default duration of zero is no duration.
             if let Some(step) = step.filter(|s| *s != 0) {
                 added_ticks = count as u128 * u128::from(step);

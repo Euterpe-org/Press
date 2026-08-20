@@ -115,7 +115,9 @@ impl Ffmpeg {
     /// Use a specific binary. Release builds hand this the copy they extracted;
     /// nothing else should guess.
     pub fn at(binary: impl Into<PathBuf>) -> Self {
-        Self { binary: binary.into() }
+        Self {
+            binary: binary.into(),
+        }
     }
 
     /// Whatever is on PATH.
@@ -212,7 +214,10 @@ impl Ffmpeg {
         if status.success() {
             Ok(Ran::ToCompletion)
         } else {
-            Err(Error::Refused(Failure { status: status.code(), stderr }))
+            Err(Error::Refused(Failure {
+                status: status.code(),
+                stderr,
+            }))
         }
     }
 }
@@ -240,9 +245,13 @@ impl ProgressSample {
             "progress" => {
                 let out_time = self.out_time_us.unwrap_or(0) as f64 / 1e6;
                 let done = value.trim() == "end";
-                let fraction = total_seconds
-                    .filter(|t| *t > 0.0)
-                    .map(|t| if done { 1.0 } else { (out_time / t).clamp(0.0, 1.0) });
+                let fraction = total_seconds.filter(|t| *t > 0.0).map(|t| {
+                    if done {
+                        1.0
+                    } else {
+                        (out_time / t).clamp(0.0, 1.0)
+                    }
+                });
                 let sample = Progress {
                     out_time,
                     fraction,
@@ -273,7 +282,9 @@ mod tests {
         assert!(sample.absorb("out_time_us=1999983", Some(10.0)).is_none());
         assert!(sample.absorb("speed=2.48x", Some(10.0)).is_none());
 
-        let reported = sample.absorb("progress=continue", Some(10.0)).expect("closed");
+        let reported = sample
+            .absorb("progress=continue", Some(10.0))
+            .expect("closed");
         assert_eq!(reported.bytes, 4_868_800);
         assert_eq!(reported.speed, Some(2.48));
         assert!((reported.out_time - 1.999983).abs() < 1e-9);
@@ -297,26 +308,40 @@ mod tests {
     fn a_position_before_the_first_frame_is_not_a_position() {
         let mut sample = ProgressSample::default();
         sample.absorb("out_time_us=-38000", Some(10.0));
-        let reported = sample.absorb("progress=continue", Some(10.0)).expect("closed");
+        let reported = sample
+            .absorb("progress=continue", Some(10.0))
+            .expect("closed");
         assert_eq!(reported.out_time, 0.0);
         assert_eq!(reported.fraction, Some(0.0));
 
         let mut unknown = ProgressSample::default();
         unknown.absorb("out_time_us=5000000", None);
-        assert_eq!(unknown.absorb("progress=continue", None).unwrap().fraction, None);
+        assert_eq!(
+            unknown.absorb("progress=continue", None).unwrap().fraction,
+            None
+        );
     }
 
     /// A run that says nothing useful still has to produce a sentence: "it
     /// failed" with no reason is the shape that sends someone hunting.
     #[test]
     fn a_silent_failure_still_names_itself() {
-        let quiet = Failure { status: Some(1), stderr: String::new() };
+        let quiet = Failure {
+            status: Some(1),
+            stderr: String::new(),
+        };
         assert_eq!(quiet.to_string(), "ffmpeg exited with status 1");
 
-        let killed = Failure { status: None, stderr: "  \n ".to_owned() };
+        let killed = Failure {
+            status: None,
+            stderr: "  \n ".to_owned(),
+        };
         assert_eq!(killed.to_string(), "ffmpeg was terminated");
 
-        let spoke = Failure { status: Some(1), stderr: "Invalid argument".to_owned() };
+        let spoke = Failure {
+            status: Some(1),
+            stderr: "Invalid argument".to_owned(),
+        };
         assert_eq!(spoke.to_string(), "Invalid argument");
     }
 }

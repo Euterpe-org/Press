@@ -87,7 +87,10 @@ pub fn plan(facts: &Facts, allowance: Option<f64>) -> Target {
         let scale = (limits::MAX_PIXELS as f64 / pixels as f64).sqrt();
         // Down to EVEN dimensions: yuv420p subsamples by two, and rounding DOWN
         // keeps the result inside the budget rather than a pixel over it.
-        (even_floor(facts.width, scale), even_floor(facts.height, scale))
+        (
+            even_floor(facts.width, scale),
+            even_floor(facts.height, scale),
+        )
     });
 
     let fps = crate::gate::probe::over_fps_limit(facts.fps).then_some(limits::MAX_FPS);
@@ -96,7 +99,13 @@ pub fn plan(facts: &Facts, allowance: Option<f64>) -> Target {
     let must_reencode = size.is_some() || fps.is_some() || !limits::codec_allowed(facts.codec);
     let may_try_av1 = !must_reencode && facts.codec != Some("av1");
 
-    Target { size, fps, trim_to, must_reencode, may_try_av1 }
+    Target {
+        size,
+        fps,
+        trim_to,
+        must_reencode,
+        may_try_av1,
+    }
 }
 
 /// Python's `max(2, int(x * scale) // 2 * 2)`: truncate toward zero, then round

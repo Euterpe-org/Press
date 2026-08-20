@@ -77,7 +77,12 @@ fn params_of(verdict: &Verdict) -> serde_json::Value {
         Verdict::TooLarge { size_mb, limit_mb } => json!({"size": size_mb, "limit": limit_mb}),
         Verdict::Invalid => json!({}),
         Verdict::FormatUnsupported { codec } => json!({"codec": codec}),
-        Verdict::ResolutionTooHigh { width, height, max_width, max_height } => json!({
+        Verdict::ResolutionTooHigh {
+            width,
+            height,
+            max_width,
+            max_height,
+        } => json!({
             "width": width, "height": height,
             "maxWidth": max_width, "maxHeight": max_height,
         }),
@@ -98,7 +103,8 @@ fn the_limits_are_the_servers() {
     assert_eq!(limits::MAX_PIXELS, c.VIDEO_MAX_PIXELS, "MAX_PIXELS");
     assert_eq!(limits::MAX_FPS, c.VIDEO_MAX_FPS, "MAX_FPS");
     assert_eq!(
-        limits::OVERRUN_ALLOWANCE_SECONDS, c.VIDEO_OVERRUN_ALLOWANCE_SECONDS,
+        limits::OVERRUN_ALLOWANCE_SECONDS,
+        c.VIDEO_OVERRUN_ALLOWANCE_SECONDS,
         "OVERRUN_ALLOWANCE_SECONDS"
     );
 
@@ -116,7 +122,12 @@ fn every_fixture_is_read_exactly_as_the_server_reads_it() {
         let path = fixtures_dir().join(&fixture.file);
         let bytes = std::fs::read(&path)
             .unwrap_or_else(|e| panic!("{}: {e}. Run tools/make_fixtures.ps1.", path.display()));
-        assert_eq!(bytes.len() as u64, fixture.size, "{}: size on disk", fixture.file);
+        assert_eq!(
+            bytes.len() as u64,
+            fixture.size,
+            "{}: size on disk",
+            fixture.file
+        );
 
         let (facts, verdict) = gate::judge(&bytes);
         let name = &fixture.file;
@@ -163,17 +174,28 @@ fn the_pixel_budget_is_an_area_and_its_edge_is_inclusive() {
         gate::judge(&bytes).1
     };
 
-    assert!(verdict("pixels_at_limit.mp4").passes(), "2560x1440 is exactly the budget");
+    assert!(
+        verdict("pixels_at_limit.mp4").passes(),
+        "2560x1440 is exactly the budget"
+    );
     assert_eq!(
         verdict("pixels_over.mp4"),
-        Verdict::ResolutionTooHigh { width: 2560, height: 1444, max_width: 2560, max_height: 1440 },
+        Verdict::ResolutionTooHigh {
+            width: 2560,
+            height: 1444,
+            max_width: 2560,
+            max_height: 1440
+        },
         "four rows past the budget is over it"
     );
 
     // 180x320 is the same area as 320x180 and just as acceptable.
     let portrait = std::fs::read(fixtures_dir().join("portrait.mp4")).expect("fixture");
     let facts = gate::probe(&portrait).expect("parses");
-    assert!(facts.height > facts.width, "the fixture should be taller than it is wide");
+    assert!(
+        facts.height > facts.width,
+        "the fixture should be taller than it is wide"
+    );
     assert!(gate::check(portrait.len() as u64, Some(&facts)).passes());
 }
 
@@ -186,18 +208,27 @@ fn size_is_judged_before_anything_is_parsed() {
     let facts = gate::probe(&bytes);
     assert!(facts.is_some(), "the fixture should parse");
 
-    assert!(gate::check(limits::MAX_BYTES, facts.as_ref()).passes(), "exactly at the limit passes");
+    assert!(
+        gate::check(limits::MAX_BYTES, facts.as_ref()).passes(),
+        "exactly at the limit passes"
+    );
 
     let over = gate::check(limits::MAX_BYTES + 1, facts.as_ref());
     assert_eq!(
         over,
-        Verdict::TooLarge { size_mb: 81, limit_mb: 80 },
+        Verdict::TooLarge {
+            size_mb: 81,
+            limit_mb: 80
+        },
         "one byte over must round UP to 81, or the sentence reads '80 MB, limit 80 MB'"
     );
 
     // Unreadable AND oversize reports the size: it is the cheaper fact and the
     // one the user can act on without a decoder.
-    assert_eq!(gate::check(limits::MAX_BYTES + 1, None).code(), "VIDEO_TOO_LARGE");
+    assert_eq!(
+        gate::check(limits::MAX_BYTES + 1, None).code(),
+        "VIDEO_TOO_LARGE"
+    );
 }
 
 /// The media header may CORRECT the sample table, never overrule it -- and when
@@ -224,7 +255,11 @@ fn the_media_header_corrects_the_sample_table_but_cannot_overrule_it() {
     // 306 samples x 33 ticks = 10098, and 10098 * 1.25 is exactly 12622.5.
     // Half-up caps at 12623; half-to-even would cap at 12622 and report
     // 24.243385 instead.
-    assert_eq!(round6(facts("synth_stretch_half.mp4").fps), 24.241464, "half rounds UP");
+    assert_eq!(
+        round6(facts("synth_stretch_half.mp4").fps),
+        24.241464,
+        "half rounds UP"
+    );
 
     // Within the 1.25x allowance the header simply wins: live chart 233 reads
     // 30.31 fps from its table alone and 30.01 once the header is consulted.
@@ -234,8 +269,15 @@ fn the_media_header_corrects_the_sample_table_but_cannot_overrule_it() {
     // samples' duration would otherwise divide the frame rate and wave a
     // 120 fps file straight through.
     let lies = facts("synth_stretch_lies.mp4");
-    assert_eq!(round6(lies.duration), 12.623, "capped at 1.25x, not the header's 30.0s");
-    assert_eq!(round6(lies.fps), round6(facts("synth_stretch_half.mp4").fps));
+    assert_eq!(
+        round6(lies.duration),
+        12.623,
+        "capped at 1.25x, not the header's 30.0s"
+    );
+    assert_eq!(
+        round6(lies.fps),
+        round6(facts("synth_stretch_half.mp4").fps)
+    );
 }
 
 /// The structural problems come first, each ahead of an audio track that would
@@ -251,7 +293,10 @@ fn a_structural_problem_is_named_before_the_audio_track() {
     ] {
         let bytes = std::fs::read(fixtures_dir().join(file)).expect("fixture");
         let (facts, verdict) = gate::judge(&bytes);
-        assert!(facts.expect("parses").has_audio, "{file} should carry audio");
+        assert!(
+            facts.expect("parses").has_audio,
+            "{file} should carry audio"
+        );
         assert_eq!(verdict.code(), expected, "{file}");
     }
 
