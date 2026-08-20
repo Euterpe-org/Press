@@ -1173,28 +1173,47 @@ impl Press {
             return;
         };
 
-        let (label, fraction, written) = match &working.phase {
-            Phase::A(phase_a::Step::Reading) => (text::READING.get(lang).to_owned(), None, None),
+        // A run has three things worth saying: WHAT is happening, HOW FAR it has
+        // got, and HOW BIG the result is getting. `detail` carries the last of
+        // those plus the quality being used -- which is the whole reason a
+        // second attempt exists.
+        let (label, fraction, detail) = match &working.phase {
+            Phase::A(phase_a::Step::Reading) => {
+                (text::READING.get(lang).to_owned(), None, Vec::new())
+            }
             Phase::A(phase_a::Step::Copying(p)) => (
                 text::STEP_COPYING.get(lang).to_owned(),
                 p.and_then(|p| p.fraction),
-                p.map(|p| p.bytes),
+                written_line(lang, p.map(|p| p.bytes)),
             ),
             Phase::A(phase_a::Step::Verifying) | Phase::B(phase_b::Step::Verifying) => {
-                (text::STEP_VERIFYING.get(lang).to_owned(), None, None)
+                (text::STEP_VERIFYING.get(lang).to_owned(), None, Vec::new())
             }
-            Phase::B(phase_b::Step::Encoding { crf, progress, .. }) => {
-                let fraction = progress.and_then(|p| p.fraction);
-                let percent =
-                    fraction.map_or_else(|| "…".to_owned(), |f| format!("{:.0}%", f * 100.0));
-                (
-                    text::STEP_ENCODING
+            Phase::B(phase_b::Step::Encoding {
+                crf,
+                attempt,
+                progress,
+            }) => {
+                // THE ATTEMPT NUMBER, from the second one onward. Without it a
+                // search that takes three encodes fills the bar, resets it, and
+                // shows the identical sentence again -- and from the outside
+                // that is indistinguishable from a loop.
+                let mut label = text::STEP_ENCODING.get(lang).to_owned();
+                if *attempt > 1 {
+                    label = format!(
+                        "{label}  {}",
+                        text::STEP_ATTEMPT
+                            .get(lang)
+                            .replace("{n}", &attempt.to_string())
+                    );
+                }
+                let mut detail = written_line(lang, progress.map(|p| p.bytes));
+                detail.push(
+                    text::STEP_QUALITY
                         .get(lang)
-                        .replace("{percent}", &percent)
                         .replace("{crf}", &crf.to_string()),
-                    fraction,
-                    progress.map(|p| p.bytes),
-                )
+                );
+                (label, progress.and_then(|p| p.fraction), detail)
             }
             Phase::B(phase_b::Step::Recalibrating { from, to }) => (
                 text::STEP_RECALIBRATING
@@ -1202,15 +1221,15 @@ impl Press {
                     .replace("{from}", &from.to_string())
                     .replace("{to}", &to.to_string()),
                 None,
-                None,
+                Vec::new(),
             ),
         };
-        let name = working.source.to_string_lossy().into_owned();
+        let name = file_name(&working.source);
 
         centred(ui, "working", |ui| {
             theme::card(ui, |ui| {
                 ui.set_width(ui.available_width());
-                theme::path(ui, &name);
+                theme::muted(ui, &name);
                 ui.add_space(space::ROW);
                 ui.label(egui::RichText::new(label).size(theme::size::TITLE));
                 ui.add_space(space::ROW);
@@ -1224,27 +1243,13 @@ impl Press {
                     bar.animate(true)
                 });
 
-                // THE SIZE, as it is written. The percentage says how far the
-                // encoder has got; the size says whether it is going to be any
-                // use, which is the question the charter actually has -- and it
-                // is what the ceilings below are watching too.
-                if let Some(bytes) = written {
+                // THE SIZE, as it is written, and the quality producing it. The
+                // bar says how far the encoder has got; these say whether the
+                // result is going to be any use, and why this attempt differs
+                // from the last one.
+                if !detail.is_empty() {
                     ui.add_space(space::ROW);
-                    ui.label(
-                        egui::RichText::new(
-                            text::STEP_WRITTEN
-                                .get(lang)
-                                .replace("{size}", &megabytes(bytes))
-                                .replace("{limit}", &megabytes(limits::MAX_BYTES)),
-                        )
-                        .monospace()
-                        .size(theme::size::SMALL)
-                        .color(if bytes > limits::MAX_BYTES {
-                            theme::NOTICE
-                        } else {
-                            theme::INK_MUTED
-                        }),
-                    );
+                    theme::spec(ui, &detail.join(SEP));
                 }
             });
         });
@@ -1396,6 +1401,19 @@ fn file_name(path: &Path) -> String {
 /// One separator, everywhere. Three different spacings around the same dot is
 /// most of what "间距很随意" was pointing at.
 const SEP: &str = " · ";
+
+/// How much has been written, when anything has.
+fn written_line(lang: Lang, bytes: Option<u64>) -> Vec<String> {
+    bytes
+        .map(|bytes| {
+            text::STEP_WRITTEN
+                .get(lang)
+                .replace("{size}", &megabytes(bytes))
+                .replace("{limit}", &megabytes(limits::MAX_BYTES))
+        })
+        .into_iter()
+        .collect()
+}
 
 /// EVERYTHING that happened to this file, both phases.
 /// What happened that the numbers do not already show.

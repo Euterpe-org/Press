@@ -529,21 +529,70 @@ pub static STEP_COPYING: Text = Text {
     ru: "Исправление без потерь…",
 };
 
+/// Just what is happening.
+///
+/// It read "Trying AV1 — it is kept only if it comes out smaller (26%)". That
+/// clause is the candidate-selection rule, which is Press's business and nobody
+/// else's; somebody watching a progress bar wants to know what is running, how
+/// far along it is and how big it is getting. The percentage went too -- the bar
+/// underneath is the percentage.
 pub static STEP_ENCODING: Text = Text {
-    en: "Trying AV1 — it is kept only if it comes out smaller ({percent})",
-    zh_hans: "正在试 AV1 —— 只有更小才会采用（{percent}）",
-    zh_hant: "正在試 AV1 —— 只有更小才會採用（{percent}）",
-    ja: "AV1 を試しています。小さくなった場合だけ採用します（{percent}）",
-    ko: "AV1을 시도 중 — 더 작을 때만 사용합니다 ({percent})",
-    de: "AV1 wird versucht — behalten wird es nur, wenn es kleiner ausfällt ({percent})",
-    es: "Probando AV1: solo se conserva si sale más pequeño ({percent})",
-    fr: "Essai en AV1 — conservé seulement s'il est plus petit ({percent})",
-    hr: "Isprobava se AV1 — zadržava se samo ako ispadne manji ({percent})",
-    hu: "AV1 próbája — csak akkor marad, ha kisebb lesz ({percent})",
-    id: "Mencoba AV1 — hanya dipakai bila hasilnya lebih kecil ({percent})",
-    nl: "AV1 wordt geprobeerd — alleen behouden als het kleiner uitvalt ({percent})",
-    pt: "Testando AV1 — só fica se sair menor ({percent})",
-    ru: "Пробуем AV1 — оставим, только если он меньше ({percent})",
+    en: "Converting to AV1…",
+    zh_hans: "正在转成 AV1…",
+    zh_hant: "正在轉成 AV1…",
+    ja: "AV1 に変換中…",
+    ko: "AV1으로 변환하는 중…",
+    de: "Wird nach AV1 konvertiert…",
+    es: "Convirtiendo a AV1…",
+    fr: "Conversion en AV1…",
+    hr: "Pretvaranje u AV1…",
+    hu: "Átalakítás AV1-re…",
+    id: "Mengubah ke AV1…",
+    nl: "Wordt omgezet naar AV1…",
+    pt: "Convertendo para AV1…",
+    ru: "Преобразование в AV1…",
+};
+
+/// Appended from the second attempt onward.
+///
+/// Without it a search that needs three encodes fills the bar, resets it, and
+/// shows the identical sentence again -- which from outside is indistinguishable
+/// from a loop. Suppressed on the first attempt, where it would be noise: its
+/// APPEARANCE is the signal.
+pub static STEP_ATTEMPT: Text = Text {
+    en: "attempt {n}",
+    zh_hans: "第 {n} 次",
+    zh_hant: "第 {n} 次",
+    ja: "{n} 回目",
+    ko: "{n}번째",
+    de: "Versuch {n}",
+    es: "intento {n}",
+    fr: "essai {n}",
+    hr: "pokušaj {n}",
+    hu: "{n}. próba",
+    id: "percobaan ke-{n}",
+    nl: "poging {n}",
+    pt: "tentativa {n}",
+    ru: "попытка {n}",
+};
+
+/// The quality being used right now. It is why a second attempt exists at all,
+/// and there is no knob for it, so the least Press can do is say it.
+pub static STEP_QUALITY: Text = Text {
+    en: "quality CRF {crf}",
+    zh_hans: "画质 CRF {crf}",
+    zh_hant: "畫質 CRF {crf}",
+    ja: "画質 CRF {crf}",
+    ko: "화질 CRF {crf}",
+    de: "Qualität CRF {crf}",
+    es: "calidad CRF {crf}",
+    fr: "qualité CRF {crf}",
+    hr: "kvaliteta CRF {crf}",
+    hu: "minőség CRF {crf}",
+    id: "kualitas CRF {crf}",
+    nl: "kwaliteit CRF {crf}",
+    pt: "qualidade CRF {crf}",
+    ru: "качество CRF {crf}",
 };
 
 pub static STEP_VERIFYING: Text = Text {
@@ -1389,6 +1438,8 @@ pub static EVERY_STRING: &[(&str, &Text)] = &[
     ("CANCELLED", &CANCELLED),
     ("FAILED", &FAILED),
     ("STEP_WRITTEN", &STEP_WRITTEN),
+    ("STEP_ATTEMPT", &STEP_ATTEMPT),
+    ("STEP_QUALITY", &STEP_QUALITY),
     ("PHASE_A_CLEAR", &PHASE_A_CLEAR),
     ("PHASE_A_CLEAR_HINT", &PHASE_A_CLEAR_HINT),
     ("LIST_SEP", &LIST_SEP),
