@@ -234,6 +234,13 @@ fn decode_loop(
         }
 
         match latest {
+            // Kept, and never taken. The drain above returns the moment it sees
+            // a shutdown, precisely so it cannot be coalesced away by a request
+            // queued behind it -- so this arm exists for the compiler's benefit
+            // rather than the thread's. Deleting the early return to "remove the
+            // duplicate" would make shutdown depend on being the last message in
+            // the queue, which is true today and is not a property anything
+            // enforces.
             Some(Request::Shutdown) => return,
             Some(Request::Pause) => {
                 running = None;
