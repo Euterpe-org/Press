@@ -23,7 +23,15 @@
 use super::limits;
 
 /// Sample-entry fourcc -> the codec name the gate and the UI speak.
-fn codec_of(fourcc: &[u8; 4]) -> Option<&'static str> {
+///
+/// Public because it is the ONLY way a `Facts` should ever acquire a codec.
+/// Naming one directly lets a test stand on an input no file produces: a VP9
+/// track has no entry here, so it arrives as `(None, "vp09")`, and a scenario
+/// written as `codec: "vp9"` would be pinning the planner against fiction while
+/// reporting coverage it does not have. Both this port and the server made that
+/// mistake within an hour of each other, and both fixed it the same way -- by
+/// removing the entry point rather than the one wrong line.
+pub fn codec_of(fourcc: &[u8; 4]) -> Option<&'static str> {
     match fourcc {
         b"avc1" | b"avc3" => Some("h264"),
         b"hev1" | b"hvc1" => Some("h265"),
@@ -405,9 +413,12 @@ impl<'a> Walker<'a> {
             .iter()
             .filter(|f| flags & **f != 0)
             .count();
+        // A stride of zero means the run declares no per-sample fields at all,
+        // so there is nothing to read and nothing to clamp against -- the count
+        // stands as declared and the durations come from a default below.
         let stride = 4 * present;
-        if stride != 0 {
-            count = count.min(stop.saturating_sub(o) / stride);
+        if let Some(readable) = stop.saturating_sub(o).checked_div(stride) {
+            count = count.min(readable);
         }
 
         let mut added_ticks = 0u128;

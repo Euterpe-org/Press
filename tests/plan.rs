@@ -49,7 +49,10 @@ struct Scenario {
 
 #[derive(Deserialize)]
 struct ScenarioFacts {
-    codec: Option<String>,
+    /// The sample-entry FOURCC, which is what a real file carries. The codec is
+    /// derived from it below rather than read from the snapshot, so a scenario
+    /// cannot name a codec no file produces.
+    raw_fourcc: String,
     width: u32,
     height: u32,
     fps: f64,
@@ -74,21 +77,24 @@ fn recipe() -> Recipe {
     serde_json::from_str(&raw).expect("recipe.json is not valid JSON")
 }
 
-fn codec_of(name: Option<&str>) -> Option<&'static str> {
-    match name {
-        Some("h264") => Some("h264"),
-        Some("h265") => Some("h265"),
-        Some("av1") => Some("av1"),
-        Some(other) => panic!("scenario names a codec the gate never accepts: {other}"),
-        None => None,
-    }
-}
-
+/// Facts built the way a real file produces them: the codec comes from the
+/// FOURCC through the probe's own table, never from a name in the snapshot.
+///
+/// Both this port and Euterpe.Web's own tests once carried a scenario with
+/// `codec = "vp9"`. Every assertion passed -- `None` and an unrecognised name
+/// are refused for the same reason -- which is exactly why it was worth fixing
+/// rather than shrugging at: a test standing on an impossible input reports
+/// coverage it does not have. Both were fixed by removing the entry point.
 fn facts_of(f: &ScenarioFacts) -> Facts {
+    let fourcc: [u8; 4] = f
+        .raw_fourcc
+        .as_bytes()
+        .try_into()
+        .unwrap_or_else(|_| panic!("a FOURCC is four bytes, got {:?}", f.raw_fourcc));
+
     Facts {
-        codec: codec_of(f.codec.as_deref()),
-        // Never read by the planner; the gate has already had its say.
-        raw_fourcc: String::new(),
+        codec: euterpe_press::gate::probe::codec_of(&fourcc),
+        raw_fourcc: f.raw_fourcc.clone(),
         width: f.width,
         height: f.height,
         fps: f.fps,

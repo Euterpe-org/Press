@@ -15,6 +15,7 @@
     {
       "name": "conforming h264",
       "facts": {
+        "raw_fourcc": "avc1",
         "codec": "h264",
         "width": 1280,
         "height": 720,
@@ -91,6 +92,7 @@
     {
       "name": "conforming av1",
       "facts": {
+        "raw_fourcc": "av01",
         "codec": "av1",
         "width": 1280,
         "height": 720,
@@ -165,8 +167,86 @@
       }
     },
     {
+      "name": "conforming h265",
+      "facts": {
+        "raw_fourcc": "hvc1",
+        "codec": "h265",
+        "width": 1280,
+        "height": 720,
+        "fps": 30.0,
+        "duration": 100.0,
+        "has_audio": false
+      },
+      "allowance": null,
+      "target": {
+        "size": null,
+        "fps": null,
+        "trim_to": null,
+        "must_reencode": false,
+        "may_try_av1": true,
+        "is_noop": true
+      },
+      "commands": {
+        "copy": [
+          "ffmpeg",
+          "-y",
+          "-loglevel",
+          "error",
+          "-i",
+          "IN.mp4",
+          "-c",
+          "copy",
+          "-an",
+          "-movflags",
+          "+faststart",
+          "OUT.mp4"
+        ],
+        "av1": [
+          "ffmpeg",
+          "-y",
+          "-loglevel",
+          "error",
+          "-i",
+          "IN.mp4",
+          "-c:v",
+          "libsvtav1",
+          "-crf",
+          "32",
+          "-preset",
+          "6",
+          "-pix_fmt",
+          "yuv420p",
+          "-an",
+          "-movflags",
+          "+faststart",
+          "OUT.mp4"
+        ],
+        "av1_44": [
+          "ffmpeg",
+          "-y",
+          "-loglevel",
+          "error",
+          "-i",
+          "IN.mp4",
+          "-c:v",
+          "libsvtav1",
+          "-crf",
+          "44",
+          "-preset",
+          "6",
+          "-pix_fmt",
+          "yuv420p",
+          "-an",
+          "-movflags",
+          "+faststart",
+          "OUT.mp4"
+        ]
+      }
+    },
+    {
       "name": "4K",
       "facts": {
+        "raw_fourcc": "avc1",
         "codec": "h264",
         "width": 3840,
         "height": 2160,
@@ -250,6 +330,7 @@
     {
       "name": "odd 4K+1",
       "facts": {
+        "raw_fourcc": "avc1",
         "codec": "h264",
         "width": 3841,
         "height": 2161,
@@ -333,6 +414,7 @@
     {
       "name": "portrait over",
       "facts": {
+        "raw_fourcc": "avc1",
         "codec": "h264",
         "width": 1440,
         "height": 2564,
@@ -416,6 +498,7 @@
     {
       "name": "120fps",
       "facts": {
+        "raw_fourcc": "avc1",
         "codec": "h264",
         "width": 1920,
         "height": 1080,
@@ -496,6 +579,7 @@
     {
       "name": "60.4fps (grace)",
       "facts": {
+        "raw_fourcc": "avc1",
         "codec": "h264",
         "width": 1920,
         "height": 1080,
@@ -572,6 +656,7 @@
     {
       "name": "60.6fps (over)",
       "facts": {
+        "raw_fourcc": "avc1",
         "codec": "h264",
         "width": 1920,
         "height": 1080,
@@ -652,6 +737,7 @@
     {
       "name": "vp9",
       "facts": {
+        "raw_fourcc": "vp09",
         "codec": null,
         "width": 1280,
         "height": 720,
@@ -728,6 +814,7 @@
     {
       "name": "mp4v",
       "facts": {
+        "raw_fourcc": "mp4v",
         "codec": null,
         "width": 1280,
         "height": 720,
@@ -804,6 +891,7 @@
     {
       "name": "trim needed",
       "facts": {
+        "raw_fourcc": "avc1",
         "codec": "h264",
         "width": 1280,
         "height": 720,
@@ -886,6 +974,7 @@
     {
       "name": "trim not needed",
       "facts": {
+        "raw_fourcc": "avc1",
         "codec": "h264",
         "width": 1280,
         "height": 720,
@@ -962,6 +1051,7 @@
     {
       "name": "4K + trim",
       "facts": {
+        "raw_fourcc": "avc1",
         "codec": "h264",
         "width": 3840,
         "height": 2160,

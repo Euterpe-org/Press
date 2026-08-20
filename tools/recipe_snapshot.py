@@ -41,37 +41,54 @@ real_run = subprocess.run
 subprocess.run = lambda cmd, **kw: captured.append([str(a) for a in cmd])  # type: ignore[assignment]
 
 import video_transcode as vt  # noqa: E402
+from app.domain import video_probe  # noqa: E402
 from app.domain.video_probe import VideoFacts  # noqa: E402
+
+
+def facts(fourcc: str, width: int, height: int, fps: float, duration: float,
+          has_audio: bool) -> VideoFacts:
+    """Build facts the way a real file produces them: from a FOURCC.
+
+    The codec is derived through the probe's own table rather than named, so a
+    scenario cannot stand on an input no file yields. A VP9 track has no entry
+    there and arrives as `(None, "vp09")`; writing `codec="vp9"` by hand pins the
+    planner against fiction while reporting coverage it does not have. Both this
+    snapshot and Euterpe.Web's own tests had exactly that bug, and both were
+    fixed by removing the entry point rather than the wrong line.
+    """
+    return VideoFacts(
+        codec=video_probe._CODEC_BY_FOURCC.get(fourcc.encode()),
+        raw_fourcc=fourcc,
+        width=width, height=height, fps=fps, duration=duration, has_audio=has_audio,
+    )
 
 # Each scenario is a decision the planner has to get right, not a sample of
 # real files -- those are covered by tests/fixtures/*.mp4 and the gate.
 SCENARIOS: list[tuple[str, VideoFacts, float | None]] = [
     # Conforms already: nothing forced, AV1 offered and must earn its place.
-    ("conforming h264", VideoFacts("h264", "avc1", 1280, 720, 30.0, 238.6, True), None),
+    ("conforming h264", facts("avc1", 1280, 720, 30.0, 238.6, True), None),
     # Already AV1: never re-encoded, a second generation of loss measured ~190%.
-    ("conforming av1", VideoFacts("av1", "av01", 1280, 720, 30.0, 100.0, False), None),
+    ("conforming av1", facts("av01", 1280, 720, 30.0, 100.0, False), None),
+    # H.265 is accepted too, and its other fourcc spelling must resolve.
+    ("conforming h265", facts("hvc1", 1280, 720, 30.0, 100.0, False), None),
     # Scaling: 4K lands exactly on the budget; the +1 case proves the rounding
     # goes DOWN to even rather than up and over.
-    ("4K", VideoFacts("h264", "avc1", 3840, 2160, 30.0, 60.0, False), None),
-    ("odd 4K+1", VideoFacts("h264", "avc1", 3841, 2161, 30.0, 60.0, False), None),
+    ("4K", facts("avc1", 3840, 2160, 30.0, 60.0, False), None),
+    ("odd 4K+1", facts("avc1", 3841, 2161, 30.0, 60.0, False), None),
     # Portrait is scaled by area like anything else -- no special case.
-    ("portrait over", VideoFacts("h264", "avc1", 1440, 2564, 30.0, 60.0, False), None),
-    ("120fps", VideoFacts("h264", "avc1", 1920, 1080, 120.032, 17.0, True), None),
+    ("portrait over", facts("avc1", 1440, 2564, 30.0, 60.0, False), None),
+    ("120fps", facts("avc1", 1920, 1080, 120.032, 17.0, True), None),
     # The half-frame grace: 60.4 is inside it, 60.6 is not.
-    ("60.4fps (grace)", VideoFacts("h264", "avc1", 1920, 1080, 60.4, 17.0, False), None),
-    ("60.6fps (over)", VideoFacts("h264", "avc1", 1920, 1080, 60.6, 17.0, False), None),
+    ("60.4fps (grace)", facts("avc1", 1920, 1080, 60.4, 17.0, False), None),
+    ("60.6fps (over)", facts("avc1", 1920, 1080, 60.6, 17.0, False), None),
     # Codecs the gate refuses: re-encoding is the only way out, at any size.
-    # `codec` is None for BOTH, because the probe only names the three it
-    # accepts -- `_CODEC_BY_FOURCC` has no vp9 entry, so a VP9 file arrives as
-    # (None, "vp09"). Writing "vp9" here would be a scenario no real file
-    # produces, and the planner would be pinned against fiction.
-    ("vp9", VideoFacts(None, "vp09", 1280, 720, 30.0, 60.0, False), None),
-    ("mp4v", VideoFacts(None, "mp4v", 1280, 720, 30.0, 60.0, False), None),
+    ("vp9", facts("vp09", 1280, 720, 30.0, 60.0, False), None),
+    ("mp4v", facts("mp4v", 1280, 720, 30.0, 60.0, False), None),
     # The tail. A trim alone leaves re-encoding merely offered, never forced.
-    ("trim needed", VideoFacts("h264", "avc1", 1280, 720, 30.0, 220.7, False), 198.4),
-    ("trim not needed", VideoFacts("h264", "avc1", 1280, 720, 30.0, 190.0, False), 198.4),
+    ("trim needed", facts("avc1", 1280, 720, 30.0, 220.7, False), 198.4),
+    ("trim not needed", facts("avc1", 1280, 720, 30.0, 190.0, False), 198.4),
     # Everything at once, which is where an argument-order mistake shows.
-    ("4K + trim", VideoFacts("h264", "avc1", 3840, 2160, 90.0, 300.0, True), 120.5),
+    ("4K + trim", facts("avc1", 3840, 2160, 90.0, 300.0, True), 120.5),
 ]
 
 rows = []
@@ -89,7 +106,13 @@ for name, facts, allowance in SCENARIOS:
     rows.append({
         "name": name,
         "facts": {
-            "codec": facts.codec, "width": facts.width, "height": facts.height,
+            # The FOURCC is what is recorded; the reader derives the codec
+            # through its own copy of the probe's table, so neither side can
+            # name a codec no file yields. `codec` rides along for a human
+            # reading the file and is not what the test consumes.
+            "raw_fourcc": facts.raw_fourcc,
+            "codec": facts.codec,
+            "width": facts.width, "height": facts.height,
             "fps": facts.fps, "duration": facts.duration, "has_audio": facts.has_audio,
         },
         "allowance": allowance,

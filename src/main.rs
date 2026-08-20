@@ -1,62 +1,159 @@
 //! Temporary command line, until the window exists.
 //!
 //! Kept afterwards regardless: the gate answering from a terminal is how a batch
-//! of files gets checked without seventeen drag-and-drops, and how CI can prove
-//! the shipped binary agrees with the server rather than only the test harness
-//! doing so.
+//! of files gets checked without a drag-and-drop each, and how a release can be
+//! proved to agree with the server rather than only the test harness doing so.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use euterpe_press::ffmpeg::Ffmpeg;
 use euterpe_press::gate::{self, Verdict};
+use euterpe_press::standardise::{self, Outcome, Step, Treatment};
 
 fn main() -> ExitCode {
-    let files: Vec<PathBuf> = std::env::args_os().skip(1).map(PathBuf::from).collect();
+    let mut fix = false;
+    let mut files: Vec<PathBuf> = Vec::new();
+    for arg in std::env::args_os().skip(1) {
+        if arg == "--fix" {
+            fix = true;
+        } else {
+            files.push(PathBuf::from(arg));
+        }
+    }
+
     if files.is_empty() {
-        eprintln!("usage: euterpe-press <video.mp4> [...]");
+        eprintln!("usage: euterpe-press [--fix] <video.mp4> [...]");
+        eprintln!("       without --fix, reports the verdict and changes nothing");
         return ExitCode::from(2);
     }
 
-    let mut refused = false;
+    let mut bad = false;
     for path in &files {
-        let bytes = match std::fs::read(path) {
-            Ok(bytes) => bytes,
-            Err(error) => {
-                println!("{:<40} could not be read: {error}", name(path));
-                refused = true;
-                continue;
-            }
-        };
-
-        let (facts, verdict) = gate::judge(&bytes);
-        let shape = match &facts {
-            None => "unreadable".to_owned(),
-            Some(f) => format!(
-                "{} {}x{} {:.2}fps {:.1}s{}",
-                f.codec.unwrap_or(if f.raw_fourcc.is_empty() { "?" } else { &f.raw_fourcc }),
-                f.width,
-                f.height,
-                f.fps,
-                f.duration,
-                if f.has_audio { " +audio" } else { "" },
-            ),
-        };
-
-        println!(
-            "{:<40} {:>7} KB  {:<40} {}",
-            name(path),
-            bytes.len() / 1024,
-            shape,
-            describe(&verdict)
-        );
-        refused |= !verdict.passes();
+        bad |= if fix { repair(path) } else { report(path) };
     }
-
-    if refused { ExitCode::FAILURE } else { ExitCode::SUCCESS }
+    if bad { ExitCode::FAILURE } else { ExitCode::SUCCESS }
 }
 
-fn name(path: &std::path::Path) -> String {
+/// Read-only: what would the server say?
+fn report(path: &Path) -> bool {
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            println!("{:<40} could not be read: {error}", name(path));
+            return true;
+        }
+    };
+
+    let (facts, verdict) = gate::judge(&bytes);
+    println!(
+        "{:<40} {:>7} KB  {:<40} {}",
+        name(path),
+        bytes.len() / 1024,
+        shape(facts.as_ref()),
+        describe(&verdict)
+    );
+    !verdict.passes()
+}
+
+/// Produce a file the server accepts, beside the source.
+fn repair(path: &Path) -> bool {
+    let output = path.with_file_name("video.mp4");
+    if output == path {
+        println!("{:<40} refusing to overwrite the source", name(path));
+        return true;
+    }
+
+    let source_bytes = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    // Development runs against whatever ffmpeg is on PATH. A release carries its
+    // own: a machine's stray encoder must never be able to change what Press
+    // produces.
+    let ffmpeg = Ffmpeg::on_path();
+
+    let mut last = String::new();
+    let outcome = standardise::standardise(&ffmpeg, path, &output, None, |step| {
+        let line = match step {
+            Step::Reading => "reading".to_owned(),
+            Step::Copying(p) => format!("stream copy {}", percent(p.and_then(|p| p.fraction))),
+            Step::Encoding { crf, attempt, progress } => format!(
+                "av1 crf {crf}{} {}",
+                if attempt > 1 { format!(" (attempt {attempt})") } else { String::new() },
+                percent(progress.and_then(|p| p.fraction)),
+            ),
+            Step::Verifying => "verifying".to_owned(),
+        };
+        if line != last {
+            print!("\r{:<40} {line:<32}", name(path));
+            let _ = std::io::Write::flush(&mut std::io::stdout());
+            last = line;
+        }
+    });
+
+    print!("\r{:<40} ", name(path));
+    match outcome {
+        Outcome::AlreadyStandard => {
+            println!("{:<32} already standard, nothing written", "");
+            false
+        }
+        Outcome::Failed(reason) => {
+            println!("FAILED: {reason}");
+            true
+        }
+        Outcome::Produced(produced) => {
+            let mut did: Vec<String> = Vec::new();
+            match produced.treatment {
+                Treatment::StreamCopy => did.push("stream copy".to_owned()),
+                Treatment::Av1 { crf } => did.push(format!("av1 crf {crf}")),
+                Treatment::KeptOwnCodec { av1_ratio } => did.push(format!(
+                    "kept {}, av1 came back at {:.0}%",
+                    produced.facts.codec.unwrap_or("?"),
+                    av1_ratio * 100.0
+                )),
+            }
+            if produced.audio_dropped {
+                did.push("audio dropped".to_owned());
+            }
+            if let Some((w, h)) = produced.scaled_to {
+                did.push(format!("scaled to {w}x{h}"));
+            }
+            if let Some(fps) = produced.frame_rate_clamped {
+                did.push(format!("{fps} fps"));
+            }
+            if let Some(trim) = produced.trimmed_to {
+                did.push(format!("trimmed to {trim:.0}s"));
+            }
+            println!(
+                "{:>7} KB -> {:>4.0}%  {}",
+                source_bytes / 1024,
+                produced.ratio(source_bytes) * 100.0,
+                did.join(", ")
+            );
+            false
+        }
+    }
+}
+
+fn percent(fraction: Option<f64>) -> String {
+    fraction.map_or_else(|| "…".to_owned(), |f| format!("{:.0}%", f * 100.0))
+}
+
+fn name(path: &Path) -> String {
     path.file_name().unwrap_or(path.as_os_str()).to_string_lossy().into_owned()
+}
+
+fn shape(facts: Option<&gate::Facts>) -> String {
+    match facts {
+        None => "unreadable".to_owned(),
+        Some(f) => format!(
+            "{} {}x{} {:.2}fps {:.1}s{}",
+            f.codec.unwrap_or(if f.raw_fourcc.is_empty() { "?" } else { &f.raw_fourcc }),
+            f.width,
+            f.height,
+            f.fps,
+            f.duration,
+            if f.has_audio { " +audio" } else { "" },
+        ),
+    }
 }
 
 /// English only, and only here. Every sentence a charter reads comes from the

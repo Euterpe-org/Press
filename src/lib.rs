@@ -8,5 +8,7 @@
 //! verdict be tested against the server's own answers on seventeen fixtures
 //! (`tests/gate.rs`) instead of against a screenshot.
 
+pub mod ffmpeg;
 pub mod gate;
 pub mod plan;
+pub mod standardise;
