@@ -182,17 +182,72 @@ pub fn card_of_height(
     response.response
 }
 
+/// The height EVERY button in an action row shares.
+///
+/// One height, because two buttons side by side at two heights read as a
+/// mistake rather than as a hierarchy -- weight is carried by fill and by type
+/// size, which is what actually says "this one first".
+pub const BUTTON_H: f32 = 44.0;
+
+/// Ink on the accent. Dark rather than white: the accent is bright enough that
+/// white on it is the lower-contrast pair.
+const ON_ACCENT: Color32 = Color32::from_rgb(6, 12, 18);
+
+/// The accent one step brighter, for hover, and one step darker for the press.
+const ACCENT_HOT: Color32 = Color32::from_rgb(0x38, 0xbd, 0xf8);
+
+enum Weight {
+    Loud,
+    Quiet,
+}
+
+/// Hand-painted rather than an `egui::Button`, for one reason: `Button::fill`
+/// overrides the fill in EVERY state, so a filled button has no hover at all.
+/// The accent one is the thing the whole window is pointing at, and it was the
+/// only control on screen that did not react to the pointer.
+fn button(ui: &mut egui::Ui, label: &str, weight: Weight) -> egui::Response {
+    let (font, pad_x) = match weight {
+        Weight::Loud => (egui::FontId::proportional(size::TITLE), 26.0),
+        Weight::Quiet => (egui::FontId::proportional(size::BODY), 20.0),
+    };
+    let galley = ui
+        .painter()
+        .layout_no_wrap(label.to_owned(), font, Color32::PLACEHOLDER);
+    let measured = galley.size();
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(measured.x + pad_x * 2.0, BUTTON_H),
+        egui::Sense::click(),
+    );
+
+    let down = response.is_pointer_button_down_on();
+    let hot = response.hovered();
+    let (fill, edge, ink) = match (weight, down, hot) {
+        (Weight::Loud, true, _) => (ACCENT_DIM, ACCENT_DIM, ON_ACCENT),
+        // A bright rim in the text colour, not a barely-lighter fill: on a
+        // saturated blue a shade change is hard to see at all.
+        (Weight::Loud, false, true) => (ACCENT_HOT, INK, ON_ACCENT),
+        (Weight::Loud, false, false) => (ACCENT, ACCENT, ON_ACCENT),
+        (Weight::Quiet, true, _) => (BACKDROP, HAIRLINE, INK_MUTED),
+        (Weight::Quiet, false, true) => (PANEL_RAISED, ACCENT, INK),
+        (Weight::Quiet, false, false) => (PANEL, HAIRLINE, INK_MUTED),
+    };
+
+    let painter = ui.painter();
+    painter.rect(
+        rect,
+        CornerRadius::same(RADIUS),
+        fill,
+        Stroke::new(1.5, edge),
+        egui::StrokeKind::Inside,
+    );
+    painter.galley(rect.center() - measured / 2.0, galley, ink);
+
+    response.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
 /// The one loud control on the screen. There is never more than one.
 pub fn primary(ui: &mut egui::Ui, label: &str) -> egui::Response {
-    let text = egui::RichText::new(label)
-        .size(size::TITLE)
-        .color(Color32::from_rgb(6, 12, 18));
-    ui.add(
-        egui::Button::new(text)
-            .fill(ACCENT)
-            .corner_radius(CornerRadius::same(RADIUS))
-            .min_size(egui::vec2(0.0, 44.0)),
-    )
+    button(ui, label, Weight::Loud)
 }
 
 /// A transport control. **Exactly** 38x30: the padding is zeroed so the size is
@@ -253,10 +308,11 @@ pub fn clock_pair(ui: &mut egui::Ui, now: &str, total: &str) {
     );
 }
 
+/// The secondary control in an action row. Same HEIGHT as `primary`, lower
+/// weight -- two buttons side by side at two different heights read as a
+/// mistake, not as a hierarchy.
 pub fn quiet(ui: &mut egui::Ui, label: &str) -> egui::Response {
-    ui.add(egui::Button::new(
-        egui::RichText::new(label).color(INK_MUTED),
-    ))
+    button(ui, label, Weight::Quiet)
 }
 
 pub fn heading(ui: &mut egui::Ui, text: &str, colour: Color32) {

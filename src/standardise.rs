@@ -29,17 +29,19 @@
 //!
 //! # Cancelling means different things to the two populations
 //!
-//! For a file whose only problem is an audio track or a tail, the stream copy is
-//! ALREADY a fully compliant result: cancelling costs nothing but the chance of
-//! a smaller file. For a file that must be re-encoded, the encode IS the fix and
-//! there is no compliant copy to fall back on -- cancelling yields
-//! [`Outcome::Cancelled`] and nothing on disk. The window has to word the button
-//! accordingly; it is not the same button.
+//! Where a stream copy has already produced a fully compliant result --
+//! everything the gate asks for was true apart from an audio track or a tail --
+//! cancelling costs nothing but the chance of a smaller file. Everywhere else
+//! the encode IS the fix, there is nothing to fall back on, and cancelling
+//! yields [`Outcome::Cancelled`] with nothing on disk. The window words the
+//! button from [`Step::Encoding::fallback`], which is the worker REPORTING which
+//! of those two situations it is actually in rather than the window predicting
+//! it.
 
 use std::path::{Path, PathBuf};
 
-use crate::ffmpeg::{Cancel, Ffmpeg, Progress, Ran};
-use crate::gate::{self, Facts};
+use crate::ffmpeg::{Cancel, Ffmpeg, Progress, Ran, Watching};
+use crate::gate::{self, Facts, limits};
 use crate::plan::{self, Encode, Target, Trim};
 
 /// Where a run has got to, for the window to render.
@@ -55,6 +57,16 @@ pub enum Step {
         crf: u32,
         attempt: usize,
         progress: Option<Progress>,
+        /// Whether a compliant file ALREADY EXISTS, so that stopping now ships
+        /// that instead of ending with nothing.
+        ///
+        /// Reported rather than predicted. The window used to guess it from
+        /// `must_reencode`, which knows about geometry, frame rate and codec but
+        /// not about SIZE -- so a 379 MB source whose shape was already legal
+        /// was offered "stop waiting, use what we have", when what they had was
+        /// a 375 MB remux the gate would refuse. The worker is the only thing
+        /// that knows, and now it says so.
+        fallback: bool,
     },
     /// Re-reading the candidates through the gate.
     Verifying,
@@ -128,6 +140,17 @@ pub enum Outcome {
 /// stop dead at the stream copy and never reach the encoder that would have
 /// fixed it -- the copy came back legal in every way except size, that was
 /// reported as an error, and the run ended there.
+/// Which ceiling a running encode passed, and therefore what happens next.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Overshot {
+    /// Past the gate's size limit: this rung is refused whatever it does next,
+    /// so a lower quality is worth trying.
+    Gate,
+    /// Past the exact copy: AV1 has lost the contest outright, and every rung
+    /// below this one is a worse picture in a race that is already over.
+    Contest,
+}
+
 enum Rejected {
     /// Legal in every respect except the size limit. Carries what it weighed.
     TooLarge(u64),
@@ -188,6 +211,10 @@ pub fn standardise(
     // The smallest thing that was produced and still refused on size. Kept so
     // that "nothing survived" can say the number rather than shrugging.
     let mut smallest_over: Option<u64> = None;
+    // What the exact copy weighed, once it is known to be shippable. It is the
+    // number the AV1 attempt has to beat, and it is therefore a ceiling that can
+    // be watched WHILE the encode runs rather than discovered after it.
+    let mut copy_bytes: Option<u64> = None;
 
     // ── the exact candidate ──────────────────────────────────────────────
     // Only possible when nothing about the geometry has to move.
@@ -198,8 +225,13 @@ pub fn standardise(
             &target,
             Encode::Copy,
         );
+        // NOT watched for size. The copy is the cheap candidate -- it rewrites
+        // no picture and runs at disk speed -- and its exact final weight is the
+        // ceiling the expensive candidate is then measured against, so stopping
+        // it early would save seconds and cost the number that saves minutes.
         match ffmpeg.run(&cmd, Some(before.duration), cancel, |p| {
             on_step(Step::Copying(Some(p)));
+            Watching::Continue
         }) {
             Err(error) => {
                 let _ = std::fs::remove_file(&copy_path);
@@ -211,6 +243,7 @@ pub fn standardise(
                 let _ = std::fs::remove_file(&copy_path);
                 return Outcome::Cancelled;
             }
+            Ok(Ran::Abandoned) => unreachable!("the copy is never abandoned"),
             Ok(Ran::ToCompletion) => {}
         }
 
@@ -230,6 +263,7 @@ pub fn standardise(
                 let _ = std::fs::remove_file(&copy_path);
             }
             Ok(candidate) => {
+                copy_bytes = Some(candidate.bytes);
                 // A stream copy rewrites no picture, so it can only grow by
                 // container overhead. Past that, something happened that a
                 // remux has no business doing.
@@ -277,6 +311,20 @@ pub fn standardise(
             } else {
                 plan::command(&source_str, &destination, &target, Encode::Av1(crf))
             };
+            // WATCHED WHILE IT RUNS. The size of the output is known twice a
+            // second, and two different ceilings end the attempt for two
+            // different reasons:
+            //
+            // * Past the exact copy, AV1 has LOST -- it only ships by being
+            //   smaller, and a lower quality to squeeze under a lossless remux
+            //   is a worse file by every measure. The ladder stops entirely.
+            // * Past the gate's limit, this rung is refused whatever it does
+            //   next, so the ladder moves on. Except on the LAST rung, which is
+            //   allowed to finish: it is what "even at the lowest quality it
+            //   comes to N MB" reports, and a number from a killed encode would
+            //   be a partial file's weight passed off as a result's.
+            let last_rung = attempt + 1 == ladder.len();
+            let overshot = std::cell::Cell::new(None);
             let ran = ffmpeg.run(
                 &cmd,
                 Some(target.trim_to.unwrap_or(before.duration)),
@@ -286,7 +334,17 @@ pub fn standardise(
                         crf,
                         attempt: attempt + 1,
                         progress: Some(p),
+                        fallback: !candidates.is_empty(),
                     });
+                    if copy_bytes.is_some_and(|copy| p.bytes > copy) {
+                        overshot.set(Some(Overshot::Contest));
+                        return Watching::Abandon;
+                    }
+                    if p.bytes > limits::MAX_BYTES && !last_rung {
+                        overshot.set(Some(Overshot::Gate));
+                        return Watching::Abandon;
+                    }
+                    Watching::Continue
                 },
             );
             match ran {
@@ -297,6 +355,16 @@ pub fn standardise(
                 Ok(Ran::Cancelled) => {
                     av1_cancelled = true;
                     break;
+                }
+                Ok(Ran::Abandoned) => {
+                    let _ = std::fs::remove_file(&av1_path);
+                    match overshot.get() {
+                        Some(Overshot::Gate) => continue,
+                        // Nothing further to try: every rung below this one is a
+                        // worse picture, and the copy is already both smaller
+                        // and lossless.
+                        Some(Overshot::Contest) | None => break,
+                    }
                 }
                 Ok(Ran::ToCompletion) => {}
             }

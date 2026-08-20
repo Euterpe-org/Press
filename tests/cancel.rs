@@ -12,7 +12,7 @@
 
 use std::path::PathBuf;
 
-use euterpe_press::ffmpeg::{Cancel, Ffmpeg, Ran};
+use euterpe_press::ffmpeg::{Cancel, Ffmpeg, Ran, Watching};
 use euterpe_press::plan::Trim;
 use euterpe_press::standardise::{self, Outcome};
 
@@ -89,7 +89,7 @@ fn a_cancelled_run_is_not_reported_as_a_failure() {
     cancel.request();
 
     let ran = ffmpeg
-        .run(&args, Some(30.0), &cancel, |_| {})
+        .run(&args, Some(30.0), &cancel, |_| Watching::Continue)
         .expect("not a failure");
     assert_eq!(ran, Ran::Cancelled);
 

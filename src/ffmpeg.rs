@@ -50,10 +50,27 @@ impl Cancel {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Ran {
     ToCompletion,
-    /// Stopped on request. The output is a partial file and the caller deletes
-    /// it -- a truncated MP4 left on disk is worse than none, because it looks
-    /// like a result.
+    /// Stopped because the CHARTER asked. The output is a partial file and the
+    /// caller deletes it -- a truncated MP4 left on disk is worse than none,
+    /// because it looks like a result.
     Cancelled,
+    /// Stopped because the CALLER asked, having watched the output grow past
+    /// the point where it could still be wanted. Kept separate from `Cancelled`
+    /// because the caller usually goes on to try something else, while a
+    /// cancellation ends the whole run.
+    Abandoned,
+}
+
+/// What the caller wants after seeing one progress sample.
+///
+/// The size of the output is known while it is being written, and an encode
+/// whose file has already passed the limit -- or already lost to a candidate
+/// that is finished -- spends every remaining second producing something that
+/// will be deleted. Watching costs an integer comparison twice a second.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Watching {
+    Continue,
+    Abandon,
 }
 
 /// How far along an encode is.
@@ -168,7 +185,7 @@ impl Ffmpeg {
         args: &[String],
         total_seconds: Option<f64>,
         cancel: &Cancel,
-        mut on_progress: impl FnMut(Progress),
+        mut on_progress: impl FnMut(Progress) -> Watching,
     ) -> Result<Ran, Error> {
         // `args[0]` is the program NAME, not an argument. It is there because
         // the recipe is compared argument for argument against the list the
@@ -213,6 +230,7 @@ impl Ffmpeg {
         let stdout = child.stdout.take().expect("stdout was piped");
         let mut sample = ProgressSample::default();
         let mut stopped = false;
+        let mut abandoned = false;
         for line in BufReader::new(stdout).lines().map_while(Result::ok) {
             // Checked per line rather than per second: `-progress` emits a block
             // roughly twice a second, which is as responsive as a cancel button
@@ -222,8 +240,12 @@ impl Ffmpeg {
                 stopped = true;
                 break;
             }
-            if let Some(progress) = sample.absorb(&line, total_seconds) {
-                on_progress(progress);
+            if let Some(progress) = sample.absorb(&line, total_seconds)
+                && on_progress(progress) == Watching::Abandon
+            {
+                let _ = child.kill();
+                abandoned = true;
+                break;
             }
         }
 
@@ -231,9 +253,15 @@ impl Ffmpeg {
         let stderr = collector.join().unwrap_or_default();
 
         // A killed process exits non-zero and complains. That is not a failure
-        // to report -- it is what being cancelled looks like from the outside.
+        // to report -- it is what being stopped looks like from the outside.
+        // The charter's request is checked FIRST: if they pressed cancel on the
+        // same sample that breached a ceiling, what they asked for is what
+        // happened.
         if stopped || cancel.requested() {
             return Ok(Ran::Cancelled);
+        }
+        if abandoned {
+            return Ok(Ran::Abandoned);
         }
         if status.success() {
             Ok(Ran::ToCompletion)

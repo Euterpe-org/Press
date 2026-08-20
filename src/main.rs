@@ -158,19 +158,25 @@ fn repair(path: &Path) -> bool {
         standardise::standardise(&ffmpeg, path, &output, Trim::default(), &cancel, |step| {
             let line = match step {
                 Step::Reading => "reading".to_owned(),
-                Step::Copying(p) => format!("stream copy {}", percent(p.and_then(|p| p.fraction))),
+                Step::Copying(p) => format!(
+                    "stream copy {} {}",
+                    percent(p.and_then(|p| p.fraction)),
+                    written(p.map(|p| p.bytes)),
+                ),
                 Step::Encoding {
                     crf,
                     attempt,
                     progress,
+                    ..
                 } => format!(
-                    "av1 crf {crf}{} {}",
+                    "av1 crf {crf}{} {} {}",
                     if attempt > 1 {
                         format!(" (attempt {attempt})")
                     } else {
                         String::new()
                     },
                     percent(progress.and_then(|p| p.fraction)),
+                    written(progress.map(|p| p.bytes)),
                 ),
                 Step::Verifying => "verifying".to_owned(),
             };
@@ -242,6 +248,14 @@ fn repair(path: &Path) -> bool {
 
 fn percent(fraction: Option<f64>) -> String {
     fraction.map_or_else(|| "…".to_owned(), |f| format!("{:.0}%", f * 100.0))
+}
+
+/// How much has been written so far. The size is the thing being fought over,
+/// so watching it grow is more use than watching the percentage.
+fn written(bytes: Option<u64>) -> String {
+    bytes.map_or_else(String::new, |b| {
+        format!("{:.1} MB", b as f64 / (1024.0 * 1024.0))
+    })
 }
 
 fn name(path: &Path) -> String {

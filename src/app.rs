@@ -56,8 +56,8 @@ use crate::{fonts, theme};
 /// which is a line of body text inside `button_padding.y` twice. 34 was the
 /// guess, and it was two pixels short -- the buttons hung out of the bar and got
 /// clipped by the region that contains them.
-const ACTION_TALL: f32 = 46.0;
-const ACTION_SHORT: f32 = 38.0;
+const ACTION_TALL: f32 = theme::BUTTON_H + 2.0;
+const ACTION_SHORT: f32 = ACTION_TALL;
 
 /// The window's own padding, one value so the body's width is derivable.
 pub const MARGIN_X: f32 = 24.0;
@@ -132,9 +132,16 @@ struct Working {
     cancel: Cancel,
     inbox: Receiver<Note>,
     step: Step,
-    /// A forced re-encode has no compliant copy behind it, so cancelling leaves
-    /// nothing. The button has to say so.
-    forced: bool,
+    /// Whether a compliant file already exists, so stopping now ships that
+    /// rather than ending with nothing.
+    ///
+    /// REPORTED by the worker, not predicted here. Predicting it from
+    /// `must_reencode` was wrong for a whole population: a 379 MB source at
+    /// 2560x1440 and 60 fps has a legal shape, so nothing was "forced", and the
+    /// window offered "stop waiting, use what we have" over a 375 MB remux that
+    /// the gate refuses. Only the worker knows whether anything has actually
+    /// survived, so only the worker gets to say.
+    fallback: bool,
 }
 
 struct Finished {
@@ -178,6 +185,10 @@ impl Press {
         text.get(self.lang)
     }
 }
+
+/// What this build calls itself. Taken from the manifest so there is exactly one
+/// place a version number exists.
+pub const VERSION: &str = concat!("v", env!("CARGO_PKG_VERSION"));
 
 /// The header's height: the tallest thing in it, which is the language button.
 /// `button_padding.y` twice plus a line of body text, plus its stroke. Measured
@@ -279,11 +290,11 @@ impl Press {
                 }
             }
             Stage::Working(working) => {
-                if working.forced {
+                if working.fallback {
+                    ACTION_SHORT
+                } else {
                     // The abandon button carries a sentence under it.
                     ACTION_SHORT + space::TIGHT + LINE_H
-                } else {
-                    ACTION_SHORT
                 }
             }
             // Show-in-folder is a primary button, so the bar is the tall one.
@@ -318,19 +329,23 @@ impl Press {
                     });
                 }
             }
+            // "Stop waiting, use what we have" is offered ONLY when there is
+            // something to use: every gate constraint already met by the exact
+            // copy, and the encode running purely to make it smaller. Everywhere
+            // else the encode is the fix, and the button says so.
             Stage::Working(working) => {
-                let label = if working.forced {
-                    &text::CANCEL_ABANDON
-                } else {
+                let fallback = working.fallback;
+                let label = if fallback {
                     &text::CANCEL_KEEP
+                } else {
+                    &text::CANCEL_ABANDON
                 };
-                let forced = working.forced;
                 let cancel = working.cancel.clone();
                 ui.vertical_centered(|ui| {
                     if theme::quiet(ui, label.get(lang)).clicked() {
                         cancel.request();
                     }
-                    if forced {
+                    if !fallback {
                         ui.add_space(space::TIGHT);
                         theme::muted(ui, text::CANCEL_ABANDON_HINT.get(lang));
                     }
@@ -400,6 +415,13 @@ impl Press {
                             }
                         }
                     });
+
+                // The version, beside the only other thing in the header that is
+                // about Press rather than about the file. Small and muted: it is
+                // never what anyone came here for, but it is the first thing
+                // asked for when a charter reports that something misbehaved.
+                ui.add_space(space::ROW);
+                theme::muted(ui, VERSION);
             });
         });
     }
@@ -496,7 +518,12 @@ impl Press {
 
         loop {
             match working.inbox.try_recv() {
-                Ok(Note::At(step)) => working.step = step,
+                Ok(Note::At(step)) => {
+                    if let Step::Encoding { fallback, .. } = &step {
+                        working.fallback = *fallback;
+                    }
+                    working.step = step;
+                }
                 Ok(Note::Done(outcome)) => {
                     self.stage = Stage::Finished(Box::new(Finished {
                         source_bytes: working.source_bytes,
@@ -526,7 +553,7 @@ impl Press {
         let Some(ffmpeg) = self.ffmpeg.clone() else {
             return;
         };
-        let Some(facts) = loaded.facts.clone() else {
+        let Some(_facts) = loaded.facts.clone() else {
             return;
         };
         // Copied out before anything else, so the borrow on the stage ends here
@@ -565,8 +592,6 @@ impl Press {
             return;
         }
 
-        let forced = trim.moves_the_opening()
-            || crate::plan::plan(&facts, trim.allowance(facts.duration)).must_reencode;
         let cancel = Cancel::new();
         let (tx, inbox) = channel();
 
@@ -589,7 +614,9 @@ impl Press {
             cancel,
             inbox,
             step: Step::Reading,
-            forced,
+            // Nothing has been produced yet, so stopping now leaves nothing.
+            // The worker corrects this the moment it knows better.
+            fallback: false,
         }));
     }
 }
@@ -769,24 +796,31 @@ impl Press {
             return;
         };
 
-        let (label, fraction) = match &working.step {
-            Step::Reading => (text::READING.get(lang).to_owned(), None),
+        let (label, fraction, written) = match &working.step {
+            Step::Reading => (text::READING.get(lang).to_owned(), None, None),
             Step::Copying(p) => (
                 text::STEP_COPYING.get(lang).to_owned(),
                 p.and_then(|p| p.fraction),
+                p.map(|p| p.bytes),
             ),
-            Step::Encoding { progress, .. } => {
+            Step::Encoding {
+                progress, fallback, ..
+            } => {
                 let fraction = progress.and_then(|p| p.fraction);
-                let template = if working.forced {
-                    &text::STEP_ENCODING_FORCED
-                } else {
+                let template = if *fallback {
                     &text::STEP_ENCODING
+                } else {
+                    &text::STEP_ENCODING_FORCED
                 };
                 let percent =
                     fraction.map_or_else(|| "…".to_owned(), |f| format!("{:.0}%", f * 100.0));
-                (template.get(lang).replace("{percent}", &percent), fraction)
+                (
+                    template.get(lang).replace("{percent}", &percent),
+                    fraction,
+                    progress.map(|p| p.bytes),
+                )
             }
-            Step::Verifying => (text::STEP_VERIFYING.get(lang).to_owned(), None),
+            Step::Verifying => (text::STEP_VERIFYING.get(lang).to_owned(), None, None),
         };
         let name = working.path.to_string_lossy().into_owned();
 
@@ -806,6 +840,29 @@ impl Press {
                 } else {
                     bar.animate(true)
                 });
+
+                // THE SIZE, as it is written. The percentage says how far the
+                // encoder has got; the size says whether it is going to be any
+                // use, which is the question the charter actually has -- and it
+                // is what the ceilings below are watching too.
+                if let Some(bytes) = written {
+                    ui.add_space(space::ROW);
+                    ui.label(
+                        egui::RichText::new(
+                            text::STEP_WRITTEN
+                                .get(lang)
+                                .replace("{size}", &megabytes(bytes))
+                                .replace("{limit}", &megabytes(limits::MAX_BYTES)),
+                        )
+                        .monospace()
+                        .size(theme::size::SMALL)
+                        .color(if bytes > limits::MAX_BYTES {
+                            theme::NOTICE
+                        } else {
+                            theme::INK_MUTED
+                        }),
+                    );
+                }
             });
         });
     }
@@ -1478,8 +1535,10 @@ mod tests {
             // Empty.
             run(&mut press, &ctx, 2);
 
-            // Working, both populations.
-            for forced in [false, true] {
+            // Working, both populations: one with a compliant copy behind it
+            // and one with nothing, which is the taller bar because the abandon
+            // button carries a sentence.
+            for fallback in [true, false] {
                 let (_tx, inbox) = channel();
                 press.stage = Stage::Working(Box::new(Working {
                     path: PathBuf::from(long),
@@ -1489,9 +1548,15 @@ mod tests {
                     step: Step::Encoding {
                         crf: 32,
                         attempt: 2,
-                        progress: None,
+                        progress: Some(crate::ffmpeg::Progress {
+                            out_time: 41.0,
+                            fraction: Some(0.46),
+                            bytes: 84_500_000,
+                            speed: Some(1.8),
+                        }),
+                        fallback,
                     },
-                    forced,
+                    fallback,
                 }));
                 run(&mut press, &ctx, 2);
             }

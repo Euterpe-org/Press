@@ -799,6 +799,25 @@ pub static FAILED: Text = Text {
     ru: "С этим файлом не получилось",
 };
 
+/// The output's size while it is being written. The percentage says how far the
+/// encoder has got; this says whether the result is going to be any use.
+pub static STEP_WRITTEN: Text = Text {
+    en: "{size} written of {limit} allowed",
+    zh_hans: "已写入 {size}，上限 {limit}",
+    zh_hant: "已寫入 {size}，上限 {limit}",
+    ja: "{size} 書き込み済み / 上限 {limit}",
+    ko: "{size} 기록됨 / 최대 {limit}",
+    de: "{size} geschrieben von {limit} erlaubt",
+    es: "{size} escritos de {limit} permitidos",
+    fr: "{size} écrits sur {limit} autorisés",
+    hr: "zapisano {size} od dopuštenih {limit}",
+    hu: "{size} kiírva a megengedett {limit}-ból",
+    id: "{size} ditulis dari {limit} yang diizinkan",
+    nl: "{size} geschreven van {limit} toegestaan",
+    pt: "{size} gravados de {limit} permitidos",
+    ru: "записано {size} из разрешённых {limit}",
+};
+
 /// Labels the full path of the file that was written. The charter is about to
 /// go and upload it, so where it went is not a detail.
 pub static SAVED_TO: Text = Text {
@@ -981,6 +1000,7 @@ pub static EVERY_STRING: &[(&str, &Text)] = &[
     ("ALREADY_STANDARD", &ALREADY_STANDARD),
     ("CANCELLED", &CANCELLED),
     ("FAILED", &FAILED),
+    ("STEP_WRITTEN", &STEP_WRITTEN),
     ("SAVED_TO", &SAVED_TO),
     ("SAVE_TITLE", &SAVE_TITLE),
     ("STILL_TOO_LARGE", &STILL_TOO_LARGE),
