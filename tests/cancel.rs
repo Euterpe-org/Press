@@ -180,11 +180,11 @@ fn cancelling_the_encode_leaves_the_material_behind() {
         "the fixture has audio, so a copy was made"
     );
 
-    // VP9 cannot be shipped, so this is the population with no fallback under
-    // the old design.
+    // VP9 cannot be shipped, and the file is nowhere near 80 MB: an encode is\r
+    // owed with no budget to spend and nothing to fall back on.\r
     let aim =
         phase_b::aim(&material.facts, material.bytes, 0.0, None).expect("an encode is needed");
-    assert_eq!(aim, phase_b::Aim::Must);
+    assert_eq!(aim, phase_b::Aim::Repair);
 
     let cancel = Cancel::new();
     cancel.request();
@@ -232,9 +232,7 @@ fn a_file_whose_only_problem_is_audio_is_deliverable_after_phase_a() {
     );
     assert_eq!(
         phase_b::aim(&material.facts, material.bytes, 0.0, None),
-        Some(phase_b::Aim::Beat {
-            smaller_than: material.bytes
-        }),
+        Some(phase_b::Aim::Beat),
         "with a deliverable file in hand, an encode only earns its place on size"
     );
 }

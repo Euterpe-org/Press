@@ -59,16 +59,14 @@ fn a_crop_never_makes_the_file_bigger() {
         .window(from)
         .expect("portrait is neither shape");
 
-    // The aim itself has to be the one that carries a ceiling. Reaching here as
-    // `Must` is the original bug: that path treats the gate's 80 MB as a budget
-    // to spend, on a file that was never anywhere near it.
+    // The aim itself has to be right. Reaching here as `Rescue` is the original
+    // bug: that path treats the gate's 80 MB as a budget to spend, on a file
+    // that was never anywhere near it.
     let aim = phase_b::aim(&material.facts, material.bytes, 0.0, Some(window))
         .expect("a crop needs an encode");
     assert_eq!(
         aim,
-        phase_b::Aim::Apply {
-            no_larger_than: material.bytes
-        },
+        phase_b::Aim::Apply,
         "a crop on a conforming file is a request, not a rescue"
     );
 

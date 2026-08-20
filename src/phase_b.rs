@@ -11,22 +11,29 @@
 //! > Press delivers the highest quality that satisfies this situation's size
 //! > requirement, and never spends quality past [`CRF_BEST`].
 //!
-//! Which requirement applies is the whole of [`Aim`]:
+//! Which requirement applies is the whole of [`Aim`], and it turns on two
+//! questions about the material -- was it over the limit, and is it deliverable
+//! as it stands:
 //!
-//! * [`Aim::Must`] -- the file is not deliverable as it stands, so the encode
-//!   IS the fix. The requirement is the gate's 80 MB. Press aims just under it
-//!   and takes the best CRF that fits, floored at [`CRF_BEST`].
-//! * [`Aim::Apply`] -- the file is deliverable and the charter asked for a
-//!   change to it anyway. There is no budget to spend, so the quality is the
-//!   house standard; and the result must not weigh MORE than what went in,
-//!   because a crop removes pixels and coming back larger is not a trade
-//!   anybody asked for.
-//! * [`Aim::Beat`] -- Phase A already produced a deliverable file, and it is
-//!   LOSSLESS. Any encode is a loss of picture, taken deliberately in exchange
-//!   for a smaller upload. The requirement is therefore "smaller than what we
-//!   already have", and the quality is the house standard -- [`plan::CRF`] --
-//!   because going finer makes the file bigger, which is the opposite of what
-//!   was asked, and going coarser drops below the standard K set.
+//! * [`Aim::Rescue`] -- over the limit. The encode IS the fix, and the gate's
+//!   allowance is a BUDGET: Press spends it down to [`CRF_BEST`] to buy the best
+//!   picture that fits.
+//! * [`Aim::Repair`] -- not deliverable, but never big. The frame rate, the
+//!   picture size, the codec. An encode is owed and there is nothing to fall
+//!   back on, so something has to ship -- but there is no budget to spend, so
+//!   the quality is the house standard.
+//! * [`Aim::Apply`] -- deliverable, and the charter asked for a change anyway.
+//!   Same house standard, and one difference that matters: there IS somewhere
+//!   to fall back to, so a result heavier than the material is not a trade
+//!   worth making. The request goes rather than the weight.
+//! * [`Aim::Beat`] -- deliverable, and nothing was asked. Phase A's file is
+//!   LOSSLESS, so any encode is a loss of picture taken deliberately in exchange
+//!   for a smaller upload. It ships only if it is smaller.
+//!
+//! **Under every one of them the result is never heavier than what went in.**
+//! That is one line of arithmetic -- the ceiling is `min(80 MB, material)` --
+//! and it is the whole answer to a screenshot of a cropped, de-audioed 2.6 MB
+//! video coming back at 3.2 MB.
 //!
 //! # Why there is no ladder any more
 //!
@@ -120,34 +127,65 @@ const MOST_ENCODES: usize = 3;
 const MOST_ATTEMPTS: usize = 6;
 
 /// What Phase B is being asked to achieve.
+///
+/// Two questions decide it, and nothing else does. Is the material over the
+/// limit -- if so the allowance is a budget. Is it deliverable as it stands --
+/// if so there is somewhere to fall back to.
+///
+/// No variant carries a size, because every one of them wants the same one:
+/// the weight of what went in, which [`run`] already holds. That used to be a
+/// payload on two variants and absent from the third, and the third is where a
+/// 2.6 MB video came back at 3.2 MB.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Aim {
-    /// The material is not deliverable. The encode is the fix, there is no
-    /// falling back to what Phase A produced, and the gate's allowance is a
-    /// BUDGET -- Press spends it down to [`CRF_BEST`] to get the best picture
-    /// that fits.
-    Must,
-    /// The material is deliverable and the charter asked for a change to it --
-    /// a crop, an opening cut. The encode has to happen and its result ships
-    /// whatever it weighs, but there is no budget to spend: the file was never
-    /// too big, so the quality is the house standard and nothing else.
+    /// Over the limit. The encode is the fix, there is no falling back to what
+    /// Phase A produced, and the gate's allowance is a BUDGET -- Press spends it
+    /// down to [`CRF_BEST`] to get the best picture that fits.
+    Rescue,
+    /// Not deliverable, and never big: the frame rate, the picture size, the
+    /// codec. An encode is owed and there is nothing to fall back on, so
+    /// something has to ship -- but there is no allowance to spend, because the
+    /// file was never anywhere near it.
     ///
-    /// This exists because treating it as [`Aim::Must`] spent the allowance on
-    /// a file that had never asked for it. A 2.6 MB video, cropped, came back at
-    /// CRF 20 and 3.2 MB -- larger than the source, under a green headline
-    /// reading "compressed".
+    /// This is the variant the taxonomy used to be missing. Folding it into
+    /// [`Aim::Rescue`] handed a 2.6 MB 120 fps video the full 80 MB as a budget,
+    /// which bought CRF 20 and returned 3.2 MB -- heavier than the source, for a
+    /// fault that a house-standard encode fixes at a third of the weight.
+    Repair,
+    /// Deliverable, and the charter asked for a change anyway -- a crop, an
+    /// opening cut. House standard, and the one thing that separates it from
+    /// [`Aim::Repair`]: the material is a perfectly good file, so a result
+    /// heavier than it is not worth having. If no quality can carry the request
+    /// out without gaining weight, the REQUEST is dropped, and Press says so.
     ///
-    /// `no_larger_than` is the second half of that fix. CRF is a QUALITY target,
-    /// not a size one, so a source already compressed harder than the house
-    /// standard comes back bigger even with fewer pixels in it -- measured
+    /// That case is rarer than it sounds but it is real. CRF is a QUALITY
+    /// target, not a size one, so a source already compressed harder than the
+    /// house standard comes back bigger even with fewer pixels in it -- measured
     /// across eight real chart videos, results ran from 13% to 140% of the
-    /// original. Cropping removes pixels and the audio track is already gone, so
-    /// there is always a quality at which the result weighs less than what went
-    /// in, and Press goes and finds it instead of shrugging.
-    Apply { no_larger_than: u64 },
-    /// The material is already deliverable and lossless. An encode only earns
-    /// its place by being smaller than this.
-    Beat { smaller_than: u64 },
+    /// original.
+    Apply,
+    /// Deliverable, lossless, and nothing was asked. An encode only earns its
+    /// place by being smaller.
+    Beat,
+}
+
+impl Aim {
+    /// Whether the gate's allowance is a budget to spend, rather than a line to
+    /// stay under. True only where the file was actually over it.
+    fn spends_the_allowance(self) -> bool {
+        matches!(self, Self::Rescue)
+    }
+
+    /// Whether there is a file to fall back to when no encode fits.
+    ///
+    /// This is what decides how hard the "no heavier than what went in" line
+    /// is. With a fallback it is absolute and enforced in flight -- an encode
+    /// past it is worthless, so it is killed where it stands. Without one it is
+    /// where Press aims and no more, because a result over the line still beats
+    /// no result at all.
+    fn has_a_fallback(self) -> bool {
+        matches!(self, Self::Apply | Self::Beat)
+    }
 }
 
 /// Something the next encode will do, for the screen that asks whether to run it.
@@ -225,9 +263,24 @@ pub enum Outcome {
     Encoded(Box<Encoded>),
     /// Every encode came back larger than the lossless material. AV1 lost, and
     /// what Phase A produced is what ships -- it is both smaller and exact.
+    ///
+    /// `av1_was` is a measured size when an encode was allowed to finish, and
+    /// `None` when it was killed the moment it passed the material's weight --
+    /// which is the ordinary way this happens. The screen has to be able to say
+    /// so either way: a run that ends with the card it started with reads as a
+    /// run that did nothing.
     MaterialWins {
         av1_was: Option<u64>,
     },
+    /// The charter asked for something and no quality Press tried could carry it
+    /// out without the file gaining weight, so it was not carried out.
+    ///
+    /// Distinct from [`Outcome::StillTooLarge`], which is about the gate's
+    /// 80 MB. This one is about the source's own weight, on a file the gate was
+    /// always going to accept -- reporting it as the other told the charter
+    /// their 3 MB video "comes to 4 MB, against a limit of 80 MB" and offered
+    /// them a trim that could not possibly help.
+    RequestDropped,
     Cancelled,
     /// Even at [`CRF_WORST`] the result is over the limit. Not a defect: a video
     /// long enough that 80 MB cannot hold it at any quality worth shipping. The
@@ -257,7 +310,7 @@ pub fn pending(
 
     if let Some(to) = target.size {
         out.push(Pending::Scale {
-            from: (facts.width, facts.height),
+            from: facts.picture(),
             to,
         });
     }
@@ -297,24 +350,28 @@ pub fn pending(
 /// already AV1. Re-encoding AV1 to AV1 was measured at ~190% of the original for
 /// no visible gain, so there is nothing to win and a generation to lose.
 pub fn aim(facts: &Facts, bytes: u64, opening_cut: f64, crop: Option<crop::Window>) -> Option<Aim> {
-    // A rescue dominates a request: a file that is over the limit AND has a
-    // crop waiting is still a rescue, and the allowance is still a budget.
-    let conforms = crate::gate::check(bytes, Some(facts)).passes();
-    if !conforms {
-        return Some(Aim::Must);
+    // SIZE FIRST, and on its own. This is the one question that turns the
+    // allowance into a budget, and asking it as "does the gate pass" folded a
+    // 2.6 MB video with the wrong frame rate in with a 400 MB one -- then
+    // handed the small one 80 MB to spend and got back a heavier file than it
+    // started with.
+    if bytes > limits::MAX_BYTES {
+        return Some(Aim::Rescue);
+    }
+    // Small, and still not deliverable: the frame rate, the picture size, the
+    // codec. An encode is owed, with nothing to fall back on and nothing to
+    // spend.
+    if !crate::gate::check(bytes, Some(facts)).passes() {
+        return Some(Aim::Repair);
     }
     // Deliverable, and the charter asked for something anyway.
     if opening_cut > 0.0 || crop.is_some() {
-        return Some(Aim::Apply {
-            no_larger_than: bytes,
-        });
+        return Some(Aim::Apply);
     }
     if facts.codec == Some("av1") {
         return None;
     }
-    Some(Aim::Beat {
-        smaller_than: bytes,
-    })
+    Some(Aim::Beat)
 }
 
 /// The CRF that would land on `want` bytes, given that `crf` produced `bytes`.
@@ -388,31 +445,41 @@ pub fn run(
         // Crop THEN scale, which is the order the filters run in. Reading
         // `size` alone expects the source's dimensions from a picture that has
         // just been cut smaller.
-        size: target.frame_size((facts.width, facts.height)),
+        size: target.frame_size(facts.picture()),
         codec: Some("av1"),
         seconds,
-        tolerance: plan::TRIM_TOLERANCE,
+        // The same slack Phase A allows, and for the same reason. A flat second
+        // was the packet-boundary figure, which is the wrong uncertainty here:
+        // `expect.seconds` comes from the material's own duration, and the probe
+        // is allowed to take that from the media header, which may run up to a
+        // quarter longer than the sample table it is describing. The encoder
+        // reproduces the FRAMES, so on a five-minute source that disagreement is
+        // seconds wide and a perfectly good encode was thrown away for it.
+        tolerance: plan::TRIM_TOLERANCE.max(seconds * 0.02),
     };
 
-    // The ceiling can never be exceeded by a useful result; the aim is where
-    // Press tries to land.
-    let (ceiling, want) = match aim {
-        Aim::Must => (
+    // NEVER HEAVIER THAN WHAT WENT IN. One line, and it holds under every aim:
+    // for a rescue the material is already over the limit so the gate's figure
+    // is the lower of the two, and everywhere else the material's own weight is.
+    let lighter = material.bytes.min(limits::MAX_BYTES);
+
+    // `ceiling` is what an encode is killed for crossing; `want` is where Press
+    // tries to land. They differ for exactly one aim, and that difference is
+    // what `has_a_fallback` is for.
+    let (ceiling, want) = if aim.spends_the_allowance() {
+        (
             limits::MAX_BYTES,
             (limits::MAX_BYTES as f64 * AIM_UNDER) as u64,
-        ),
-        // No budget to spend: the file was never too big. The ceiling is the
-        // gate's, and it is only ever reached by escalating away from the house
-        // standard, never by aiming at it.
-        // TWO ceilings at once, and the lower one wins: the gate's, and the
-        // weight of what went in. There is no budget to spend here -- the file
-        // was never too big -- and coming back larger than the source is not an
-        // outcome to accept just because the encode was unavoidable.
-        Aim::Apply { no_larger_than } => {
-            let ceiling = limits::MAX_BYTES.min(no_larger_than);
-            (ceiling, (ceiling as f64 * AIM_UNDER) as u64)
-        }
-        Aim::Beat { smaller_than } => (smaller_than, smaller_than),
+        )
+    } else if aim.has_a_fallback() {
+        (lighter, (lighter as f64 * AIM_UNDER) as u64)
+    } else {
+        // A repair has nowhere to go if it produces nothing, so the hard line
+        // is the gate's and `lighter` is only where it aims. A result over that
+        // line is kept while a coarser one is tried, and ships if the search
+        // runs out -- an fps that no longer breaks the upload, at a few percent
+        // more weight, beats a file that still does.
+        (limits::MAX_BYTES, (lighter as f64 * AIM_UNDER) as u64)
     };
 
     let input = material.path().to_string_lossy().into_owned();
@@ -420,13 +487,16 @@ pub fn run(
     let mut measured: Vec<(u32, u64)> = Vec::new();
     let mut best: Option<Encoded> = None;
     let mut smallest_over: Option<u64> = None;
+    // The weight of an encode that was allowed to finish and then lost to the
+    // material. Stays `None` where every attempt was killed on the way up.
+    let av1_was: Option<u64> = None;
     let mut encodes = 0usize;
     let mut attempts = 0usize;
     // The projection is allowed to restart the search once. After that there is
     // a real measurement, which is worth more than any projection.
     // Calibration is for spending a budget. Where there is none, the house
     // standard is the answer and there is nothing to calibrate towards.
-    let calibrated = Cell::new(!matches!(aim, Aim::Must));
+    let calibrated = Cell::new(!aim.spends_the_allowance());
 
     while attempts < MOST_ATTEMPTS && encodes < MOST_ENCODES {
         if cancel.requested() {
@@ -434,7 +504,14 @@ pub fn run(
         }
         attempts += 1;
 
-        let output = work.file(&format!("fit-crf{crf}.mp4"));
+        // NAMED BY ATTEMPT, NOT BY QUALITY. The search revisits a CRF -- under a
+        // budget it walks coarse, then fine, then coarse again -- and a path
+        // that is a pure function of the quality made the second visit reopen
+        // the file the first one is still being held in. `-y` truncated it, and
+        // `best.replace(winner)` then deleted `previous.path`, which by then WAS
+        // `winner.path`: the run handed back an `Encoded` naming a file it had
+        // unlinked one statement earlier, under a green "compressed" headline.
+        let output = work.file(&format!("try{attempts}-crf{crf}.mp4"));
         let cmd = if opening_cut > 0.0 {
             plan::command_with_opening_cut(
                 &input,
@@ -457,14 +534,26 @@ pub fn run(
                 progress: Some(p),
             });
 
-            // Already past the ceiling: no amount of remaining footage makes it
-            // smaller, so every further second produces a file that will be
+            // Already past the ceiling, and far enough in for the number to
+            // mean something: no amount of remaining footage makes the file
+            // smaller, so every further second produces bytes that will be
             // deleted.
-            if p.bytes > ceiling {
-                let projected = p
-                    .fraction
-                    .filter(|f| *f > 0.0)
-                    .map_or(p.bytes, |f| (p.bytes as f64 / f) as u64);
+            //
+            // THE WAIT IS WHAT MAKES IT USABLE, and it is the same wait
+            // `PROJECT_AT` was introduced for. Where the ceiling is the gate's
+            // 80 MB it can only be crossed late, so this never bound; where it
+            // is the material's own weight -- a few megabytes -- it is crossed
+            // inside the opening keyframe, and `bytes / 0.05` projected five
+            // times the truth. That went straight into `crf_for`, which has
+            // about seventeen CRF of sensitivity per e-fold of error, so a
+            // 3 MB source asking only to be cropped skipped the entire useful
+            // range of the dial and shipped a mosaic at CRF 63. A quarter of an
+            // encode is cheap; a wrong answer at the bottom of the dial is not.
+            if p.bytes > ceiling
+                && let Some(fraction) = p.fraction
+                && fraction >= PROJECT_AT
+            {
+                let projected = (p.bytes as f64 / fraction) as u64;
                 killed.set(Some(Killed::Ceiling { projected }));
                 return Watching::Abandon;
             }
@@ -502,30 +591,38 @@ pub fn run(
                         crf = to;
                         continue;
                     }
-                    Some(Killed::Ceiling { projected }) => match aim {
+                    Some(Killed::Ceiling { projected }) => {
+                        // RECORDED, not discarded. A projection taken at the
+                        // moment the ceiling was crossed is a measurement of
+                        // this footage at this quality, and throwing it away
+                        // left `next_crf` blind: it kept re-proposing the CRF
+                        // that had just been proved too coarse, so the search
+                        // oscillated between two qualities -- re-encoding the
+                        // same file byte for byte -- until the attempts ran out.
+                        // It is an estimate, and `SLOPE_BOUNDS` is what bounds
+                        // the damage an estimate can do to the fit.
+                        measured.push((crf, projected));
+
                         // AV1 has lost. Every rung below this one is a worse
                         // picture in a race that is already over, and the
                         // material is both smaller and exact.
-                        Aim::Beat { .. } => break,
-                        // Over the gate's ceiling, so a coarser quality is the
-                        // only way through -- for a rescue and for a request
-                        // alike.
-                        Aim::Must | Aim::Apply { .. } => {
-                            if crf >= CRF_WORST {
-                                smallest_over = Some(
-                                    smallest_over.map_or(projected, |s: u64| s.min(projected)),
-                                );
-                                break;
-                            }
-                            let next = crf_for(crf, projected, want).max(crf + 1).min(CRF_WORST);
-                            on_step(Step::Recalibrating {
-                                from: crf,
-                                to: next,
-                            });
-                            crf = next;
-                            continue;
+                        if matches!(aim, Aim::Beat) {
+                            break;
                         }
-                    },
+
+                        // The smallest thing that did not fit is the one number
+                        // worth reporting when nothing does. It used to be kept
+                        // only at CRF 63, so a search that ran out of attempts
+                        // on the way there reported "AV1 lost, the material
+                        // ships" about a file that could not be uploaded.
+                        smallest_over =
+                            Some(smallest_over.map_or(projected, |s: u64| s.min(projected)));
+                        if crf >= CRF_WORST {
+                            break;
+                        }
+                        escalate(&mut crf, &measured, want, &mut on_step);
+                        continue;
+                    }
                     None => break,
                 }
             }
@@ -551,7 +648,7 @@ pub fn run(
                 if crf >= CRF_WORST {
                     break;
                 }
-                crf = next_crf(&measured, want).max(crf + 1).min(CRF_WORST);
+                escalate(&mut crf, &measured, want, &mut on_step);
                 continue;
             }
             // An encode that produced the wrong shape. `verify` already checked
@@ -566,25 +663,57 @@ pub fn run(
             }
         }
 
-        // It passes the gate. Whether it satisfies THIS AIM is a second
-        // question, and the two aims answer it in opposite ways.
+        // It passes the gate. Whether it is worth having is a second question,
+        // and it is the same question every time: is it heavier than what went
+        // in. What differs is only what to do about it, and that turns on
+        // whether there is anything to fall back to.
         //
-        // `Beat` has somewhere to fall back to -- the lossless material is a
-        // perfectly good file -- so an AV1 that is not smaller has simply lost.
-        //
-        // `Apply` does not. The material is not what was asked for, so the
-        // encode has to produce something. But "produce something" is not the
-        // same as "produce anything": a crop removes pixels and the audio track
-        // is already gone, so a result LARGER than what went in is not a trade
-        // anybody asked for. It goes coarser and tries again, which converges
-        // because there is always a quality at which fewer pixels weigh less.
-        if let Aim::Beat { smaller_than } = aim
-            && checked.bytes >= smaller_than
-        {
+        // `Beat` answers first and without qualification: it was optional, the
+        // material is lossless, and an encode that does not come back strictly
+        // lighter has bought a generation of loss for nothing.
+        if matches!(aim, Aim::Beat) && checked.bytes >= lighter {
             let _ = std::fs::remove_file(&output);
             return Outcome::MaterialWins {
                 av1_was: Some(checked.bytes),
             };
+        }
+
+        if checked.bytes > lighter && crf < CRF_WORST && encodes < MOST_ENCODES {
+            match aim {
+                // A file the charter can upload today, and a request Press
+                // cannot carry out at this weight. Go coarser: a crop removes
+                // pixels, so there is usually a quality at which fewer pixels
+                // weigh less. Deleted rather than kept -- if the search runs
+                // out, the material ships and the request is reported dropped,
+                // which is a better answer than a heavier file nobody asked for.
+                Aim::Apply => {
+                    let _ = std::fs::remove_file(&output);
+                    escalate(&mut crf, &measured, want, &mut on_step);
+                    continue;
+                }
+                // Nothing to fall back to: the material cannot be uploaded at
+                // all. KEPT, not deleted -- running out of attempts having
+                // thrown it away would leave the charter with nothing, and a
+                // fixed file that gained a few percent still beats a broken one.
+                Aim::Repair => {
+                    let winner = Encoded {
+                        path: output,
+                        bytes: checked.bytes,
+                        facts: checked.facts,
+                        crf,
+                        encodes,
+                    };
+                    if let Some(previous) = best.replace(winner) {
+                        let _ = std::fs::remove_file(&previous.path);
+                    }
+                    escalate(&mut crf, &measured, want, &mut on_step);
+                    continue;
+                }
+                // Unreachable. A rescue's input is over the limit and its output
+                // passed the gate, so it cannot be the heavier of the two; and
+                // `Beat` was answered above.
+                Aim::Rescue | Aim::Beat => {}
+            }
         }
 
         let winner = Encoded {
@@ -595,29 +724,9 @@ pub fn run(
             encodes,
         };
 
-        if let Aim::Apply { no_larger_than } = aim
-            && winner.bytes > no_larger_than
-            && crf < CRF_WORST
-            && encodes < MOST_ENCODES
-        {
-            // KEPT, not deleted. A valid result that is merely bigger than
-            // wanted is still a valid result, and running out of budget having
-            // thrown it away would lose the charter's crop entirely.
-            if let Some(previous) = best.replace(winner) {
-                let _ = std::fs::remove_file(&previous.path);
-            }
-            let next = next_crf(&measured, want).max(crf + 1).min(CRF_WORST);
-            on_step(Step::Recalibrating {
-                from: crf,
-                to: next,
-            });
-            crf = next;
-            continue;
-        }
-
-        // Is there quality left on the table? Only under `Must`, where the
-        // allowance is a budget to spend rather than a line to stay under.
-        if matches!(aim, Aim::Must) {
+        // Is there quality left on the table? Only where the allowance is a
+        // budget to spend rather than a line to stay under.
+        if aim.spends_the_allowance() {
             let finer = next_crf(&measured, want);
             if finer + WORTH_RESTARTING <= crf && encodes < MOST_ENCODES {
                 // Keep this one: if the finer attempt overshoots and the budget
@@ -639,15 +748,33 @@ pub fn run(
     if cancel.requested() {
         return finish(best, Outcome::Cancelled);
     }
-    match smallest_over {
-        Some(smallest) => finish(best, Outcome::StillTooLarge { smallest }),
-        None => finish(
-            best,
-            Outcome::MaterialWins {
-                av1_was: measured.last().map(|(_, b)| *b),
-            },
-        ),
+    // Nothing fit. What that MEANS depends entirely on what was being asked,
+    // and saying it wrong is how a 3 MB video was told it "comes to 4 MB,
+    // against a limit of 80 MB".
+    match (aim, smallest_over) {
+        // No quality got under the gate, and there is nothing to fall back to.
+        (Aim::Rescue | Aim::Repair, Some(smallest)) => {
+            finish(best, Outcome::StillTooLarge { smallest })
+        }
+        // No quality carried the request out without the file gaining weight.
+        // The material is a perfectly good upload; it is the request that goes.
+        (Aim::Apply, Some(_)) => finish(best, Outcome::RequestDropped),
+        _ => finish(best, Outcome::MaterialWins { av1_was }),
     }
+}
+
+/// Give up on this quality and pick the next one to try, coarser than this.
+///
+/// Always at least one step coarser: a search that is allowed to re-propose the
+/// quality it just abandoned is a search that can run out of attempts without
+/// ever having moved.
+fn escalate(crf: &mut u32, measured: &[(u32, u64)], want: u64, on_step: &mut impl FnMut(Step)) {
+    let next = next_crf(measured, want).max(*crf + 1).min(CRF_WORST);
+    on_step(Step::Recalibrating {
+        from: *crf,
+        to: next,
+    });
+    *crf = next;
 }
 
 /// A result already in hand beats whatever the search was about to say.

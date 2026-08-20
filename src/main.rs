@@ -265,9 +265,15 @@ fn repair(path: &Path) -> bool {
             deliver(path, &done.path, &output, source_bytes, &did)
         }
         phase_b::Outcome::MaterialWins { av1_was } => {
-            if let Some(was) = av1_was {
-                did.push(format!("av1 came back at {} KB, kept the copy", was / 1024));
-            }
+            did.push(match av1_was {
+                Some(was) => format!("av1 came back at {} KB, kept the copy", was / 1024),
+                None => "av1 was heading past the source, kept the copy".to_owned(),
+            });
+            deliver(path, material.path(), &output, source_bytes, &did)
+        }
+        // The file is deliverable; only the crop or the opening cut is not.
+        phase_b::Outcome::RequestDropped => {
+            did.push("the requested change would have made it heavier, dropped".to_owned());
             deliver(path, material.path(), &output, source_bytes, &did)
         }
         phase_b::Outcome::StillTooLarge { smallest } => {
