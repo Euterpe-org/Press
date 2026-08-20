@@ -28,7 +28,9 @@ pub const HEIGHT: f32 = 40.0;
 /// weight, and there is now enough band for the hatching over a discarded
 /// stretch to actually be visible as hatching.
 const TRACK: f32 = 20.0;
-const HANDLE_W: f32 = 10.0;
+/// Wide enough to carry grip marks. A handle you cannot draw a grip on is a
+/// handle nobody reads as one.
+const HANDLE_W: f32 = 13.0;
 /// How close a click has to be to count as grabbing a handle rather than
 /// seeking. Generous, because a handle is small and a mis-grab that seeks
 /// instead of trimming is an annoying thing to undo.
@@ -170,8 +172,33 @@ pub fn timeline(
         }
     }
 
-    handle(ui, at(start), rect, allow_opening_cut, start > 0.0);
-    handle(ui, at(end), rect, true, trim.keep_until.is_some());
+    // WHAT THE POINTER IS OVER, which is most of what makes this look like a
+    // control rather than a picture of one. "一眼看不出来是可以裁剪的，一眼看
+    // 上去像只读的预览" -- and it was: a blue bar with two grey caps, no cursor
+    // change, no hover response, nothing that answers "can I touch this".
+    let hovering = ui.input(|i| i.pointer.hover_pos());
+    let over = |x: f32| hovering.is_some_and(|p| rect.contains(p) && (p.x - x).abs() <= GRAB);
+    let held = grabbed;
+    let hot_start = allow_opening_cut && (over(at(start)) || held == Some(Grabbed::Start));
+    let hot_end = over(at(end)) || held == Some(Grabbed::End);
+
+    if hot_start || hot_end {
+        // The single strongest affordance there is: the pointer changes shape
+        // before anything is pressed.
+        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+    } else if hovering.is_some_and(|p| rect.contains(p)) {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+
+    handle(
+        ui,
+        at(start),
+        rect,
+        allow_opening_cut,
+        start > 0.0,
+        hot_start,
+    );
+    handle(ui, at(end), rect, true, trim.keep_until.is_some(), hot_end);
 
     // LAST, and over the handles. Painted underneath, the playhead disappeared
     // the moment it agreed with a handle -- which is exactly when it is being
@@ -208,10 +235,13 @@ pub fn timeline(
     change
 }
 
-fn handle(ui: &egui::Ui, x: f32, rect: Rect, enabled: bool, engaged: bool) {
-    let colour = match (enabled, engaged) {
+fn handle(ui: &egui::Ui, x: f32, rect: Rect, enabled: bool, engaged: bool, hot: bool) {
+    // Idle is INK, not INK_MUTED. A grey bar at the end of a coloured bar reads
+    // as that bar's end cap; a bright one reads as a separate thing sitting on
+    // top of it, which is what it is.
+    let colour = match (enabled, engaged || hot) {
         (false, _) => theme::HAIRLINE,
-        (true, false) => theme::INK_MUTED,
+        (true, false) => theme::INK,
         (true, true) => theme::ACCENT,
     };
     // Full height, so it overhangs the track: a handle flush with the region it
@@ -227,6 +257,22 @@ fn handle(ui: &egui::Ui, x: f32, rect: Rect, enabled: bool, engaged: bool) {
         Stroke::new(1.0, theme::BACKDROP),
         StrokeKind::Inside,
     );
+
+    // GRIP MARKS. Two short rules is the universal glyph for "drag this", and
+    // it is the difference between a coloured bar and a control. Dark on both
+    // handle colours, so they read either way.
+    if enabled {
+        let middle = body.center();
+        for offset in [-2.5, 2.5] {
+            ui.painter().line_segment(
+                [
+                    pos2(middle.x + offset, middle.y - 5.0),
+                    pos2(middle.x + offset, middle.y + 5.0),
+                ],
+                Stroke::new(1.0, theme::BACKDROP),
+            );
+        }
+    }
 }
 
 /// Diagonal strokes over a discarded stretch. Colour alone reads as "a different

@@ -168,25 +168,28 @@ pub static READING: Text = Text {
 
 /// Heads the list of changes on the inspect screen.
 ///
-/// It read "有问题，Press 会自动修好" -- two clauses for one fact, a promise
-/// rather than a statement, and the product naming itself to the person already
-/// looking at it. Every item underneath it already says what will be done; the
-/// heading only has to introduce them.
+/// A SENTENCE, not a label. It read "要改的地方" -- a noun phrase -- while the
+/// screen after it read "还不能上传", a statement. One slot, two grammars, on
+/// consecutive screens.
+///
+/// Before that it read "有问题，Press 会自动修好": two clauses for one fact, a
+/// promise rather than a statement, and the product naming itself to the person
+/// already looking at it.
 pub static VERDICT_WILL_FIX: Text = Text {
-    en: "What needs changing",
-    zh_hans: "要改的地方",
-    zh_hant: "要改的地方",
-    ja: "変更が必要な点",
-    ko: "고쳐야 할 것",
-    de: "Was geändert wird",
-    es: "Qué hay que cambiar",
-    fr: "Ce qui doit changer",
-    hr: "Što treba promijeniti",
-    hu: "Amit módosítani kell",
-    id: "Yang perlu diubah",
-    nl: "Wat er moet veranderen",
-    pt: "O que precisa mudar",
-    ru: "Что нужно изменить",
+    en: "Fix these before uploading",
+    zh_hans: "上传前要改这几处",
+    zh_hant: "上傳前要改這幾處",
+    ja: "アップロードの前にここを直します",
+    ko: "업로드 전에 이것들을 고칩니다",
+    de: "Das wird vor dem Hochladen geändert",
+    es: "Esto se corrige antes de subirlo",
+    fr: "À corriger avant l'envoi",
+    hr: "Ovo treba popraviti prije slanja",
+    hu: "Ezeket javítjuk feltöltés előtt",
+    id: "Ini diperbaiki sebelum diunggah",
+    nl: "Dit wordt voor het uploaden hersteld",
+    pt: "Isto será corrigido antes do envio",
+    ru: "Это исправляется перед загрузкой",
 };
 
 /// The one case Press cannot help with: nothing readable to work from.
@@ -393,21 +396,24 @@ pub static TRIM_TITLE: Text = Text {
     ru: "Обрезка",
 };
 
+/// The timeline's own status line, and the one place a hint about dragging
+/// belongs -- "整段" said nothing at all, and the control it sits under was
+/// being read as a read-only preview.
 pub static TRIM_NONE: Text = Text {
-    en: "Whole video",
-    zh_hans: "整段",
-    zh_hant: "整段",
-    ja: "動画全体",
-    ko: "전체 영상",
-    de: "Ganzes Video",
-    es: "Video completo",
-    fr: "Vidéo entière",
-    hr: "Cijeli video",
-    hu: "Teljes videó",
-    id: "Seluruh video",
-    nl: "Hele video",
-    pt: "Vídeo inteiro",
-    ru: "Всё видео",
+    en: "Whole video — drag either end to trim",
+    zh_hans: "整段保留，拖两端可裁剪",
+    zh_hant: "整段保留，拖兩端可裁剪",
+    ja: "動画全体 — 端をドラッグすると切り取れます",
+    ko: "전체 영상 — 양 끝을 끌어 자를 수 있습니다",
+    de: "Ganzes Video — zum Kürzen an den Enden ziehen",
+    es: "Video completo: arrastra los extremos para recortar",
+    fr: "Vidéo entière — glissez les extrémités pour découper",
+    hr: "Cijeli video — povucite krajeve za rezanje",
+    hu: "Teljes videó — húzd a végeit a vágáshoz",
+    id: "Seluruh video — seret ujungnya untuk memotong",
+    nl: "Hele video — sleep de uiteinden om bij te snijden",
+    pt: "Vídeo inteiro — arraste as pontas para cortar",
+    ru: "Всё видео — потяните за края, чтобы обрезать",
 };
 
 pub static TRIM_TAIL_ONLY: Text = Text {
@@ -656,21 +662,31 @@ pub static FAILED: Text = Text {
 /// header, and claiming anything about it here would promise an answer Press
 /// does not have yet. "第一层检查没发现问题" said so by naming the phase, which
 /// is a word from the source code rather than from the charter's situation.
+/// THE HANDOFF, and it is the whole reason this line is worded the way it is.
+///
+/// This screen deliberately does not judge size -- that is not settled by
+/// reading a header. So a file can pass here and still be refused on the next
+/// screen, and when this said merely "nothing needs changing" that sequence read
+/// as the window contradicting itself: 「你刚说没什么要改，怎么又说不能传」.
+///
+/// Naming what has NOT been looked at yet costs four words and removes the
+/// contradiction entirely, because the two screens are then plainly about two
+/// different things.
 pub static PHASE_A_CLEAR: Text = Text {
-    en: "Nothing needs changing",
-    zh_hans: "没有要改的地方",
-    zh_hant: "沒有要改的地方",
-    ja: "変更が必要な点はありません",
-    ko: "고칠 것이 없습니다",
-    de: "Nichts muss geändert werden",
-    es: "No hay nada que cambiar",
-    fr: "Rien à changer",
-    hr: "Ništa ne treba mijenjati",
-    hu: "Nincs mit módosítani",
-    id: "Tidak ada yang perlu diubah",
-    nl: "Er hoeft niets te veranderen",
-    pt: "Nada precisa mudar",
-    ru: "Менять ничего не нужно",
+    en: "Nothing to change — size comes next",
+    zh_hans: "没有要改的，接着看体积",
+    zh_hant: "沒有要改的，接著看體積",
+    ja: "変更は不要です。次はサイズを見ます",
+    ko: "고칠 것은 없습니다 — 다음은 용량입니다",
+    de: "Nichts zu ändern — als Nächstes die Größe",
+    es: "Nada que cambiar: ahora toca el tamaño",
+    fr: "Rien à changer — reste la taille",
+    hr: "Ništa za promijeniti — slijedi veličina",
+    hu: "Nincs mit módosítani — jön a méret",
+    id: "Tidak ada yang perlu diubah — berikutnya ukuran",
+    nl: "Niets te veranderen — nu de grootte",
+    pt: "Nada a mudar — falta o tamanho",
+    ru: "Менять нечего — дальше размер",
 };
 
 pub static PHASE_A_CLEAR_HINT: Text = Text {
@@ -1188,6 +1204,29 @@ pub static STOP: Text = Text {
     ru: "Остановить",
 };
 
+/// The same button as [`ABANDON`], once the file has been written.
+///
+/// It does the same thing -- clear the workspace, back to the drop screen -- but
+/// what that MEANS has changed. Before the save it is throwing work away; after
+/// it, the work is safely on disk and this only starts the next video. "Discard"
+/// beside a file that was just saved reads as though it might undo the save.
+pub static ANOTHER: Text = Text {
+    en: "Another one",
+    zh_hans: "再处理一个",
+    zh_hant: "再處理一個",
+    ja: "次のファイル",
+    ko: "다음 파일",
+    de: "Noch eines",
+    es: "Otro más",
+    fr: "Un autre",
+    hr: "Još jedan",
+    hu: "Még egyet",
+    id: "Satu lagi",
+    nl: "Nog eentje",
+    pt: "Mais um",
+    ru: "Ещё один",
+};
+
 /// Throw the whole thing away and start from a file again.
 pub static ABANDON: Text = Text {
     en: "Discard",
@@ -1469,6 +1508,7 @@ pub static EVERY_STRING: &[(&str, &Text)] = &[
     ("STEP_RECALIBRATING", &STEP_RECALIBRATING),
     ("STOP", &STOP),
     ("ABANDON", &ABANDON),
+    ("ANOTHER", &ANOTHER),
     ("BACK_TO_TRIM", &BACK_TO_TRIM),
     ("SHRINK_FURTHER", &SHRINK_FURTHER),
     ("SAVE", &SAVE),

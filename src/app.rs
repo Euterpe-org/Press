@@ -442,25 +442,53 @@ impl Press {
                 // widget but not a `horizontal` inside it -- the row claims the
                 // full width and its contents start hard against the left edge.
                 centred_row(ui, "bench-actions", |ui| {
-                    if theme::quiet(ui, text::ABANDON.get(lang)).clicked() {
+                    // ONE ACTION, TWO MEANINGS. It clears the workspace and
+                    // goes back to the drop screen either way -- but before the
+                    // file is written that is throwing work away, and after it
+                    // is written the work is safely on disk and this only starts
+                    // the next video. Calling it "discard" once the file exists
+                    // reads as though it might undo the save.
+                    let leave = if saved.is_some() {
+                        &text::ANOTHER
+                    } else {
+                        &text::ABANDON
+                    };
+                    if theme::quiet(ui, leave.get(lang)).clicked() {
                         pressed = Some(Act::Abandon);
                     }
+
                     // Only where it is actionable: the message above says to
                     // trim it shorter, and without this there is nowhere to do
                     // that but drag the file in again.
                     if stuck && theme::quiet(ui, text::BACK_TO_TRIM.get(lang)).clicked() {
                         pressed = Some(Act::BackToTrim);
                     }
+
                     // THE LOUD BUTTON IS ALWAYS THE NEXT USEFUL THING, and it
                     // MOVES as the run progresses -- which is itself a signal
                     // that something happened.
                     //
-                    // It used to be pinned to Save, so on a file that was
-                    // already fine the recommended action -- make it smaller,
-                    // which is smaller for every player who downloads it -- was
-                    // the grey pill beside a big blue button. "我找试试压得更小
-                    // 这个按钮找了半天."
+                    //   not ready       start
+                    //   ready           make it smaller   (save is the quiet one)
+                    //   encoded         save
+                    //   saved           show in folder
                     //
+                    // It used to be pinned to Save, which broke the rule twice
+                    // over: on a file that was already fine the recommended
+                    // action was a grey pill beside a big blue button, and after
+                    // the file had been written the big blue button still said
+                    // "save" -- pointing at the step just completed.
+                    if saved.is_some() {
+                        // Written. Uploading is what happens next and it starts
+                        // in a file manager. Saving again is not offered: the
+                        // file is on disk, the folder is one press away, and a
+                        // third button here is a row with no focus.
+                        if theme::primary(ui, text::SHOW_IN_FOLDER.get(lang)).clicked() {
+                            pressed = Some(Act::Reveal);
+                        }
+                        return;
+                    }
+
                     // Hidden when stuck: the search already reached the coarsest
                     // quality there is, so pressing again spends minutes on the
                     // same answer. The way out is a shorter video.
@@ -485,14 +513,6 @@ impl Press {
                         if hit {
                             pressed = Some(Act::Save);
                         }
-                    }
-                    // Only once there is somewhere to go. Uploading is the next
-                    // thing that happens, and it starts in a file manager.
-                    if ready
-                        && saved.is_some()
-                        && theme::quiet(ui, text::SHOW_IN_FOLDER.get(lang)).clicked()
-                    {
-                        pressed = Some(Act::Reveal);
                     }
                 });
 
