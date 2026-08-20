@@ -166,21 +166,27 @@ pub static READING: Text = Text {
     ru: "Чтение…",
 };
 
+/// Heads the list of changes on the inspect screen.
+///
+/// It read "有问题，Press 会自动修好" -- two clauses for one fact, a promise
+/// rather than a statement, and the product naming itself to the person already
+/// looking at it. Every item underneath it already says what will be done; the
+/// heading only has to introduce them.
 pub static VERDICT_WILL_FIX: Text = Text {
-    en: "Press will fix this",
-    zh_hans: "有问题，Press 会自动修好",
-    zh_hant: "有問題，Press 會自動修好",
-    ja: "問題があります。Press が直します",
-    ko: "문제가 있습니다. Press가 고쳐 드립니다",
-    de: "Press bringt das in Ordnung",
-    es: "Press lo va a arreglar",
-    fr: "Press va s'en occuper",
-    hr: "Press će to popraviti",
-    hu: "A Press megjavítja",
-    id: "Press akan memperbaikinya",
-    nl: "Press lost dit op",
-    pt: "O Press vai corrigir isso",
-    ru: "Press это исправит",
+    en: "What needs changing",
+    zh_hans: "要改的地方",
+    zh_hant: "要改的地方",
+    ja: "変更が必要な点",
+    ko: "고쳐야 할 것",
+    de: "Was geändert wird",
+    es: "Qué hay que cambiar",
+    fr: "Ce qui doit changer",
+    hr: "Što treba promijeniti",
+    hu: "Amit módosítani kell",
+    id: "Yang perlu diubah",
+    nl: "Wat er moet veranderen",
+    pt: "O que precisa mudar",
+    ru: "Что нужно изменить",
 };
 
 /// The one case Press cannot help with: nothing readable to work from.
@@ -246,21 +252,24 @@ pub static FINDING_AUDIO: Text = Text {
     ru: "Есть аудиодорожка",
 };
 
+/// The reason stays -- "why is my audio being deleted" is a fair question -- but
+/// it is one clause, not two. "so nobody ever hears it" restates "the game plays
+/// music.ogg" for anyone who read the first half.
 pub static FIX_AUDIO: Text = Text {
-    en: "removed — the game plays music.ogg, so nobody ever hears it",
-    zh_hans: "会去掉 —— 游戏播的是 music.ogg，这条音轨没有人听得到",
-    zh_hant: "會去掉 —— 遊戲播的是 music.ogg，這條音軌沒有人聽得到",
-    ja: "削除します。ゲームが再生するのは music.ogg なので、誰にも聞こえません",
-    ko: "제거합니다. 게임은 music.ogg를 재생하므로 아무도 듣지 못합니다",
-    de: "wird entfernt — das Spiel gibt music.ogg wieder, gehört wird sie nie",
-    es: "se quitará — el juego reproduce music.ogg, así que nadie la oye",
-    fr: "sera retirée — le jeu lit music.ogg, personne ne l'entend",
-    hr: "bit će uklonjen — igra svira music.ogg, pa ga nitko ne čuje",
-    hu: "eltávolítjuk — a játék a music.ogg-ot játssza, ezt senki sem hallja",
-    id: "akan dihapus — gim memutar music.ogg, jadi tak ada yang mendengarnya",
-    nl: "wordt verwijderd — de game speelt music.ogg, dus niemand hoort het",
-    pt: "será removida — o jogo toca music.ogg, então ninguém a ouve",
-    ru: "будет удалена — игра воспроизводит music.ogg, её никто не слышит",
+    en: "removed — the game plays music.ogg",
+    zh_hans: "会去掉，游戏播的是 music.ogg",
+    zh_hant: "會去掉，遊戲播的是 music.ogg",
+    ja: "削除します（ゲームが再生するのは music.ogg）",
+    ko: "제거합니다 — 게임은 music.ogg를 재생합니다",
+    de: "wird entfernt — das Spiel gibt music.ogg wieder",
+    es: "se quitará — el juego reproduce music.ogg",
+    fr: "sera retirée — le jeu lit music.ogg",
+    hr: "bit će uklonjen — igra svira music.ogg",
+    hu: "eltávolítjuk — a játék a music.ogg-ot játssza",
+    id: "akan dihapus — gim memutar music.ogg",
+    nl: "wordt verwijderd — de game speelt music.ogg",
+    pt: "será removida — o jogo toca music.ogg",
+    ru: "будет удалена — игра воспроизводит music.ogg",
 };
 
 pub static FINDING_RESOLUTION: Text = Text {
@@ -592,24 +601,27 @@ pub static FAILED: Text = Text {
 
 // ── Phase A: the deterministic screen ──────────────────────────────────
 
-/// Nothing deterministic is wrong. Size is deliberately not mentioned: it is
-/// not a Phase A question and saying anything about it here would promise an
-/// answer Press does not have yet.
+/// The other half of [`VERDICT_WILL_FIX`], worded to match it.
+///
+/// Size is deliberately not mentioned -- it is not settled by looking at the
+/// header, and claiming anything about it here would promise an answer Press
+/// does not have yet. "第一层检查没发现问题" said so by naming the phase, which
+/// is a word from the source code rather than from the charter's situation.
 pub static PHASE_A_CLEAR: Text = Text {
-    en: "Nothing to fix up front",
-    zh_hans: "第一层检查没发现问题",
-    zh_hant: "第一層檢查沒發現問題",
-    ja: "最初の確認では問題なし",
-    ko: "먼저 확인한 항목엔 문제 없음",
-    de: "Vorab nichts zu beheben",
-    es: "Nada que corregir de entrada",
-    fr: "Rien à corriger d'emblée",
-    hr: "Ništa za popraviti unaprijed",
-    hu: "Előzetesen nincs javítanivaló",
-    id: "Tidak ada yang perlu diperbaiki dulu",
-    nl: "Vooraf niets te herstellen",
-    pt: "Nada a corrigir de antemão",
-    ru: "Заранее исправлять нечего",
+    en: "Nothing needs changing",
+    zh_hans: "没有要改的地方",
+    zh_hant: "沒有要改的地方",
+    ja: "変更が必要な点はありません",
+    ko: "고칠 것이 없습니다",
+    de: "Nichts muss geändert werden",
+    es: "No hay nada que cambiar",
+    fr: "Rien à changer",
+    hr: "Ništa ne treba mijenjati",
+    hu: "Nincs mit módosítani",
+    id: "Tidak ada yang perlu diubah",
+    nl: "Er hoeft niets te veranderen",
+    pt: "Nada precisa mudar",
+    ru: "Менять ничего не нужно",
 };
 
 pub static PHASE_A_CLEAR_HINT: Text = Text {
@@ -697,6 +709,29 @@ pub static LIST_SEP: Text = Text {
     nl: ", ",
     pt: ", ",
     ru: ", ",
+};
+
+/// The inspect screen's button.
+///
+/// NOT "Start". What it starts is a stream copy that takes a second, and giving
+/// it the same word as the bench's button -- which starts a transcode that can
+/// take minutes -- put one label on two very different acts. From the charter's
+/// side this press is simply carrying on.
+pub static NEXT_STEP: Text = Text {
+    en: "Next",
+    zh_hans: "下一步",
+    zh_hant: "下一步",
+    ja: "次へ",
+    ko: "다음",
+    de: "Weiter",
+    es: "Siguiente",
+    fr: "Suivant",
+    hr: "Dalje",
+    hu: "Tovább",
+    id: "Lanjut",
+    nl: "Volgende",
+    pt: "Avançar",
+    ru: "Далее",
 };
 
 /// The headline when the file cannot be uploaded yet. Paired with a short list
@@ -1357,6 +1392,7 @@ pub static EVERY_STRING: &[(&str, &Text)] = &[
     ("PHASE_A_CLEAR", &PHASE_A_CLEAR),
     ("PHASE_A_CLEAR_HINT", &PHASE_A_CLEAR_HINT),
     ("LIST_SEP", &LIST_SEP),
+    ("NEXT_STEP", &NEXT_STEP),
     ("NOT_READY", &NOT_READY),
     ("WILL_LEAD", &WILL_LEAD),
     ("SHORT_RESOLUTION", &SHORT_RESOLUTION),

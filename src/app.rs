@@ -417,7 +417,7 @@ impl Press {
             Stage::Inspect(inspect) => {
                 if self.ffmpeg.is_some() && inspect.facts.is_some() {
                     ui.vertical_centered(|ui| {
-                        if theme::primary(ui, text::START.get(lang)).clicked() {
+                        if theme::primary(ui, text::NEXT_STEP.get(lang)).clicked() {
                             self.start_phase_a();
                         }
                     });
