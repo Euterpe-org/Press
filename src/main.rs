@@ -67,10 +67,14 @@ fn window(open: Option<PathBuf>) -> eframe::Result {
     let lang = Lang::from_system();
     let ffmpeg = euterpe_press::encoder::resolve();
 
+    // FIXED. Not resizable, not maximisable: the body is one canvas laid out
+    // deliberately, and every size other than this one was a size nothing was
+    // designed for.
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
-            .with_inner_size([720.0, 860.0])
-            .with_min_inner_size([560.0, 640.0])
+            .with_inner_size(euterpe_press::app::WINDOW)
+            .with_resizable(false)
+            .with_maximize_button(false)
             .with_drag_and_drop(true)
             .with_title(text::WINDOW_TITLE.get(lang)),
         ..Default::default()

@@ -109,7 +109,7 @@ pub fn resolve() -> Option<Ffmpeg> {
     #[cfg(not(embedded_encoder))]
     {
         // Development only. A shipped build never reaches this.
-        let usable = std::process::Command::new("ffmpeg")
+        let usable = crate::ffmpeg::quietly(std::path::Path::new("ffmpeg"))
             .arg("-version")
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())

@@ -25,8 +25,10 @@
 
 use std::io::Read;
 use std::path::Path;
-use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::process::{Child, Stdio};
+
+use crate::ffmpeg::quietly;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
 use std::sync::{Arc, Mutex};
 
@@ -37,6 +39,14 @@ use std::sync::{Arc, Mutex};
 /// aiming a trim needs. Full size would be eight times that for no benefit: the
 /// window never shows it larger than this.
 pub const MAX_EDGE: u32 = 640;
+
+/// Two seek requests this close together are the same moment.
+///
+/// A held scrubber reports its position every frame; without this, standing
+/// still would decode the picture already on screen, over and over. A fortieth
+/// of a second is finer than the frame interval of any source up to 40 fps, and
+/// far finer than a viewfinder needs.
+const SAME_MOMENT: f64 = 0.025;
 
 /// One decoded frame, ready to become a texture.
 #[derive(Clone)]
@@ -67,6 +77,13 @@ struct Shared {
     /// Set when the decoder reached the end of the source, so the window can
     /// show the play button again rather than a spinner that never resolves.
     ended: AtomicBool,
+    /// How many decoder processes have actually been started.
+    ///
+    /// Observable because the difference between "one seek, one process" and
+    /// "one seek per frame, sixty processes a second" is otherwise invisible
+    /// from outside -- and that difference was a strobe of console windows that
+    /// looked like malware.
+    decodes: AtomicU64,
 }
 
 /// A running preview. Dropping it stops the decoder.
@@ -78,13 +95,28 @@ pub struct Preview {
 }
 
 impl Preview {
-    /// Start a decoder for `source`, sized from the frame it actually carries.
-    pub fn open(ffmpeg: &Path, source: &Path, width: u32, height: u32) -> Self {
+    /// Start a decoder for `source`, sized from the frame it actually carries
+    /// and clocked at the rate it was shot.
+    ///
+    /// `fps` is not decoration. Frames come down a rawvideo pipe with no
+    /// timestamps on them, so a playing preview knows where it is only by
+    /// counting forward from where the seek landed -- and counting at the wrong
+    /// rate is a playhead that drifts away from the picture it is supposed to be
+    /// pointing at. At a hard-coded 30 a 60 fps source ran the readout at half
+    /// speed and a 24 fps one at a quarter again too fast.
+    pub fn open(ffmpeg: &Path, source: &Path, width: u32, height: u32, fps: f64) -> Self {
         let size = preview_size(width, height, MAX_EDGE);
+        // A source that reports nothing usable still has to play at SOME rate.
+        let step = if fps.is_finite() && fps > 1.0 {
+            1.0 / fps
+        } else {
+            1.0 / 30.0
+        };
         let shared = Arc::new(Shared {
             latest: Mutex::new(None),
             playing: AtomicBool::new(false),
             ended: AtomicBool::new(false),
+            decodes: AtomicU64::new(0),
         });
         let (commands, inbox) = channel();
 
@@ -92,7 +124,7 @@ impl Preview {
             let shared = Arc::clone(&shared);
             let ffmpeg = ffmpeg.to_path_buf();
             let source = source.to_path_buf();
-            move || decode_loop(&ffmpeg, &source, size, &shared, &inbox)
+            move || decode_loop(&ffmpeg, &source, size, step, &shared, &inbox)
         });
 
         Self {
@@ -127,6 +159,11 @@ impl Preview {
     /// True once the decoder has run off the end of the source.
     pub fn ended(&self) -> bool {
         self.shared.ended.load(Ordering::Relaxed)
+    }
+
+    /// How many decoder processes this preview has started.
+    pub fn decodes(&self) -> u64 {
+        self.shared.decodes.load(Ordering::Relaxed)
     }
 
     /// The newest frame, if one has arrived since the decoder started.
@@ -170,37 +207,66 @@ fn decode_loop(
     ffmpeg: &Path,
     source: &Path,
     size: (u32, u32),
+    step: f64,
     shared: &Arc<Shared>,
     inbox: &Receiver<Request>,
 ) {
     let mut running: Option<Decoder> = None;
+    let mut showing: Option<f64> = None;
 
     loop {
-        // A command always wins over more frames: the charter dragging the
-        // scrubber is more current than anything still in the pipe.
-        match inbox.try_recv() {
-            Ok(Request::Shutdown) | Err(TryRecvError::Disconnected) => return,
-            Ok(Request::Pause) => {
+        // COALESCE. A drag on the scrubber produces a request per frame -- sixty
+        // a second -- and each one starts a decoder. Acting on every request
+        // means sixty processes a second, each killed by the next before it can
+        // finish, which is a scrubber that shows nothing while pinning a core.
+        //
+        // Only the newest request matters: the charter is looking at where the
+        // pointer is NOW. So the queue is drained to its last entry and the rest
+        // are dropped unexecuted -- work nobody was ever going to see.
+        let mut latest: Option<Request> = None;
+        loop {
+            match inbox.try_recv() {
+                Ok(Request::Shutdown) => return,
+                Err(TryRecvError::Disconnected) => return,
+                Ok(request) => latest = Some(request),
+                Err(TryRecvError::Empty) => break,
+            }
+        }
+
+        match latest {
+            Some(Request::Shutdown) => return,
+            Some(Request::Pause) => {
                 running = None;
                 shared.playing.store(false, Ordering::Relaxed);
                 continue;
             }
-            Ok(Request::Seek(at)) => {
+            Some(Request::Seek(at)) => {
                 shared.playing.store(false, Ordering::Relaxed);
                 shared.ended.store(false, Ordering::Relaxed);
                 running = None;
-                if let Some(frame) = still(ffmpeg, source, size, at) {
+                // Already showing this moment. A scrubber held still still
+                // reports its position every frame, and decoding the same frame
+                // again would cost a process to produce the picture already on
+                // screen.
+                if showing.is_some_and(|shown| (shown - at).abs() < SAME_MOMENT) {
+                    continue;
+                }
+                shared.decodes.fetch_add(1, Ordering::Relaxed);
+                if let Some(frame) = still(ffmpeg, source, size, step, at) {
                     *shared.latest.lock().expect("preview frame") = Some(frame);
+                    showing = Some(at);
                 }
                 continue;
             }
-            Ok(Request::Play(from)) => {
+            Some(Request::Play(from)) => {
                 shared.ended.store(false, Ordering::Relaxed);
-                running = Decoder::start(ffmpeg, source, size, from, true);
+                shared.decodes.fetch_add(1, Ordering::Relaxed);
+                running = Decoder::start(ffmpeg, source, size, step, from, true);
                 shared.playing.store(running.is_some(), Ordering::Relaxed);
+                showing = None;
                 continue;
             }
-            Err(TryRecvError::Empty) => {}
+            None => {}
         }
 
         let Some(decoder) = running.as_mut() else {
@@ -222,8 +288,8 @@ fn decode_loop(
 }
 
 /// One frame at a position, for the scrubber.
-fn still(ffmpeg: &Path, source: &Path, size: (u32, u32), at: f64) -> Option<Frame> {
-    let mut decoder = Decoder::start(ffmpeg, source, size, at, false)?;
+fn still(ffmpeg: &Path, source: &Path, size: (u32, u32), step: f64, at: f64) -> Option<Frame> {
+    let mut decoder = Decoder::start(ffmpeg, source, size, step, at, false)?;
     decoder.next_frame()
 }
 
@@ -243,11 +309,12 @@ impl Decoder {
         ffmpeg: &Path,
         source: &Path,
         size: (u32, u32),
+        step: f64,
         from: f64,
         realtime: bool,
     ) -> Option<Self> {
         let (w, h) = size;
-        let mut command = Command::new(ffmpeg);
+        let mut command = quietly(ffmpeg);
         command.args(["-v", "error", "-nostdin"]);
         if realtime {
             // Makes ffmpeg read its input at the source's own frame rate. Without
@@ -287,9 +354,7 @@ impl Decoder {
             size,
             frame_bytes: (w as usize) * (h as usize) * 4,
             next_pts: from,
-            // Refined by the caller when the source's rate is known; 30 is only
-            // the label on a viewfinder's position readout.
-            frame_step: 1.0 / 30.0,
+            frame_step: step,
         })
     }
 

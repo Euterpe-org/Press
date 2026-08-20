@@ -105,6 +105,30 @@ impl std::fmt::Display for Error {
     }
 }
 
+/// Start a child without giving it a console window.
+///
+/// Press is a GUI program (`windows_subsystem = "windows"`), so it has no
+/// console of its own; ffmpeg is a console program, and Windows hands one to
+/// every console process that does not have one. Without this flag every single
+/// invocation -- each viewfinder seek, each encode -- pops a black window on
+/// screen and closes it again. Dragging the scrubber turns that into a strobe
+/// that looks exactly like malware, and no part of it is visible to the person
+/// who wrote the spawn.
+///
+/// Every process Press starts goes through here. There is no second way to
+/// spawn one.
+pub fn quietly(program: &Path) -> Command {
+    let mut command = Command::new(program);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        /// `CREATE_NO_WINDOW`
+        const NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(NO_WINDOW);
+    }
+    command
+}
+
 /// The encoder Press runs.
 #[derive(Debug, Clone)]
 pub struct Ffmpeg {
@@ -164,7 +188,7 @@ impl Ffmpeg {
         full.extend(plan::PROGRESS_FLAGS.iter().map(|s| (*s).to_owned()));
         full.extend(args.iter().cloned());
 
-        let mut child = Command::new(&self.binary)
+        let mut child = quietly(&self.binary)
             .args(&full)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())

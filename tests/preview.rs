@@ -55,7 +55,7 @@ fn is_flat(rgba: &[u8]) -> bool {
 fn a_frame_comes_back_at_the_size_it_was_asked_for() {
     let Some(ffmpeg) = ffmpeg_path() else { return };
 
-    let preview = Preview::open(&ffmpeg, &fixture("plain_h264.mp4"), 320, 180);
+    let preview = Preview::open(&ffmpeg, &fixture("plain_h264.mp4"), 320, 180, 30.0);
     assert_eq!(
         preview.size(),
         (320, 180),
@@ -86,7 +86,7 @@ fn a_codec_no_player_would_open_still_previews() {
     let Some(ffmpeg) = ffmpeg_path() else { return };
 
     for (file, w, h) in [("vp9.mp4", 320, 180), ("mpeg4.mp4", 320, 180)] {
-        let preview = Preview::open(&ffmpeg, &fixture(file), w, h);
+        let preview = Preview::open(&ffmpeg, &fixture(file), w, h, 30.0);
         preview.seek(0.2);
         let frame = await_frame(&preview);
         assert_eq!((frame.width, frame.height), (w, h), "{file}");
@@ -104,7 +104,7 @@ fn a_large_source_is_scaled_before_it_reaches_the_pipe() {
     let (w, h) = preview_size(2560, 1440, MAX_EDGE);
     assert_eq!((w, h), (640, 360));
 
-    let preview = Preview::open(&ffmpeg, &fixture("pixels_at_limit.mp4"), 2560, 1440);
+    let preview = Preview::open(&ffmpeg, &fixture("pixels_at_limit.mp4"), 2560, 1440, 30.0);
     assert_eq!(preview.size(), (640, 360));
 
     preview.seek(0.3);
@@ -119,7 +119,7 @@ fn a_large_source_is_scaled_before_it_reaches_the_pipe() {
 fn playing_to_the_end_reports_that_it_ended() {
     let Some(ffmpeg) = ffmpeg_path() else { return };
 
-    let preview = Preview::open(&ffmpeg, &fixture("plain_h264.mp4"), 320, 180);
+    let preview = Preview::open(&ffmpeg, &fixture("plain_h264.mp4"), 320, 180, 30.0);
     preview.play(0.0);
     await_frame(&preview);
 
@@ -134,13 +134,113 @@ fn playing_to_the_end_reports_that_it_ended() {
     );
 }
 
+/// A drag on the scrubber sends a seek per frame. Acting on every one of them
+/// starts sixty decoder processes a second, each killed by the next before it
+/// can produce anything — a scrubber that shows nothing while pinning a core,
+/// and, because a GUI process gives every console child a window, a strobe of
+/// black rectangles that looks exactly like malware.
+///
+/// That is not a hypothetical: it is what shipped, and what a screenshot caught.
+/// Only the newest request matters, so the queue is drained and the rest are
+/// dropped unexecuted.
+#[test]
+fn a_burst_of_seeks_does_not_start_a_process_for_each_one() {
+    let Some(ffmpeg) = ffmpeg_path() else { return };
+
+    let preview = Preview::open(&ffmpeg, &fixture("plain_h264.mp4"), 320, 180, 30.0);
+
+    // A second of dragging, at sixty frames a second, across the clip. Stops
+    // short of the very end: a one-second source has its last frame at 0.967,
+    // and asking for a picture past that is asking for one that is not there.
+    for step in 0..60 {
+        preview.seek(f64::from(step) / 60.0 * 0.9);
+    }
+    await_frame(&preview);
+    std::thread::sleep(Duration::from_millis(400));
+
+    let decodes = preview.decodes();
+    assert!(
+        decodes < 10,
+        "sixty seeks started {decodes} decoders; they are meant to coalesce"
+    );
+}
+
+/// A scrubber held still reports its position every frame. Decoding the picture
+/// already on screen, repeatedly, costs a process each time and changes nothing.
+#[test]
+fn holding_the_scrubber_still_decodes_once() {
+    let Some(ffmpeg) = ffmpeg_path() else { return };
+
+    let preview = Preview::open(&ffmpeg, &fixture("plain_h264.mp4"), 320, 180, 30.0);
+    preview.seek(0.5);
+    await_frame(&preview);
+    std::thread::sleep(Duration::from_millis(300));
+    let after_first = preview.decodes();
+
+    // Sixty frames of a pointer that has not moved.
+    for _ in 0..60 {
+        preview.seek(0.5);
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    std::thread::sleep(Duration::from_millis(300));
+
+    assert_eq!(
+        preview.decodes(),
+        after_first,
+        "standing still decoded again; the same moment is the same picture"
+    );
+}
+
+/// A playing preview has to know where it is, at the rate the source runs at.
+///
+/// It did not. Frames come down a rawvideo pipe with no timestamps, so position
+/// is counted forward from the seek — and the step was hard-coded to a thirtieth
+/// of a second whatever the source was. `-re` paces the pipe at the source's
+/// real rate, so on this 120 fps fixture the picture ran at speed while the
+/// readout crawled at a quarter of it: press play and the video moves, the
+/// playhead barely does.
+///
+/// Measured against the WALL CLOCK, because that is the claim: a second of
+/// playing is a second of position. The band is wide enough for a loaded machine
+/// and still nowhere near the four-fold error it is there to catch.
+#[test]
+fn a_playing_preview_advances_at_the_source_rate() {
+    let Some(ffmpeg) = ffmpeg_path() else { return };
+
+    let preview = Preview::open(&ffmpeg, &fixture("fps120.mp4"), 320, 180, 120.0);
+    preview.play(0.0);
+    // Only the newest frame is kept, so how far playback has already got by the
+    // time the first one is observed is not fixed. The claim is about the RATE,
+    // so both ends of the interval are measured rather than assumed.
+    let first = await_frame(&preview);
+
+    let began = Instant::now();
+    std::thread::sleep(Duration::from_millis(350));
+    let elapsed = began.elapsed().as_secs_f64();
+
+    let Some(later) = preview.frame() else {
+        panic!("a third of a second of playing produced no frame at all");
+    };
+    let advanced = later.pts - first.pts;
+    assert!(
+        advanced > elapsed * 0.5,
+        "{elapsed:.2}s of playing advanced the position by only {advanced:.3}s — \
+         the readout is counting at the wrong rate"
+    );
+    assert!(
+        advanced < elapsed * 1.6,
+        "{elapsed:.2}s of playing advanced the position by {advanced:.3}s — \
+         faster than the source runs"
+    );
+}
+
 /// Dropping the preview has to stop the decoder. A viewfinder that leaves an
 /// ffmpeg running per file the charter opened would quietly eat the machine.
 #[test]
 fn dropping_the_preview_stops_its_decoder() {
     let Some(ffmpeg) = ffmpeg_path() else { return };
 
-    let preview = Preview::open(&ffmpeg, &fixture("plain_h264.mp4"), 320, 180);
+    let preview = Preview::open(&ffmpeg, &fixture("plain_h264.mp4"), 320, 180, 30.0);
     preview.play(0.0);
     await_frame(&preview);
     // Drop joins the worker, which drops the Decoder, which kills the child.

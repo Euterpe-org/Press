@@ -99,6 +99,54 @@ pub static DROP_RELEASE: Text = Text {
     ru: "Отпустите",
 };
 
+/// The drop zone's headline when dragging cannot work. It stops offering the
+/// thing that is broken and offers the thing that is not.
+pub static DROP_PICK_INSTEAD: Text = Text {
+    en: "Choose a video",
+    zh_hans: "选一个视频",
+    zh_hant: "選一個影片",
+    ja: "動画を選択",
+    ko: "영상 선택",
+    de: "Video auswählen",
+    es: "Elige un vídeo",
+    fr: "Choisir une vidéo",
+    hr: "Odaberite videozapis",
+    hu: "Válassz videót",
+    id: "Pilih video",
+    nl: "Kies een video",
+    pt: "Escolha um vídeo",
+    ru: "Выберите видео",
+};
+
+/// Shown in the drop zone when Press is running elevated, where Windows blocks
+/// the drop and says nothing about why.
+pub static DROP_BLOCKED_BY_ADMIN: Text = Text {
+    en: "Running as administrator, so Windows blocks dragging files in. \
+         Click here to choose one, or reopen Press normally.",
+    zh_hans: "正在以管理员身份运行，Windows 会挡住拖放。点这里选文件，或者用普通权限重新打开。",
+    zh_hant: "正在以系統管理員身分執行，Windows 會擋住拖放。點這裡選檔案，或者用一般權限重新開啟。",
+    ja: "管理者として実行中のため、Windows がドラッグ＆ドロップを遮断しています。ここをクリックして選ぶか、通常の権限で開き直してください。",
+    ko: "관리자 권한으로 실행 중이라 Windows가 드래그 앤 드롭을 막습니다. 여기를 클릭해 선택하거나, 일반 권한으로 다시 여세요.",
+    de: "Läuft als Administrator, daher blockiert Windows das Hineinziehen von Dateien. \
+         Hier klicken, um eine auszuwählen, oder Press normal öffnen.",
+    es: "Se está ejecutando como administrador, así que Windows bloquea arrastrar archivos. \
+         Haz clic aquí para elegir uno o vuelve a abrir Press con permisos normales.",
+    fr: "Exécuté en tant qu'administrateur : Windows bloque le glisser-déposer. \
+         Cliquez ici pour en choisir une, ou rouvrez Press normalement.",
+    hr: "Pokrenuto kao administrator, pa Windows blokira povlačenje datoteka. \
+         Kliknite ovdje da odaberete datoteku ili ponovno otvorite Press s običnim ovlastima.",
+    hu: "Rendszergazdaként fut, ezért a Windows letiltja a fájlok behúzását. \
+         Kattints ide a kiválasztáshoz, vagy nyisd meg a Presst normál jogosultsággal.",
+    id: "Berjalan sebagai administrator, jadi Windows memblokir seret-dan-lepas. \
+         Klik di sini untuk memilih berkas, atau buka ulang Press dengan hak biasa.",
+    nl: "Draait als administrator, dus Windows blokkeert het slepen van bestanden. \
+         Klik hier om er een te kiezen, of open Press gewoon opnieuw.",
+    pt: "Executando como administrador, então o Windows bloqueia arrastar arquivos. \
+         Clique aqui para escolher um ou reabra o Press normalmente.",
+    ru: "Запущено от имени администратора, поэтому Windows блокирует перетаскивание. \
+         Нажмите здесь, чтобы выбрать файл, или откройте Press с обычными правами.",
+};
+
 pub static NOT_A_VIDEO: Text = Text {
     en: "That is not a video file",
     zh_hans: "这不是视频文件",
@@ -811,6 +859,8 @@ pub static EVERY_STRING: &[(&str, &Text)] = &[
     ("DROP_PROMPT", &DROP_PROMPT),
     ("DROP_HINT", &DROP_HINT),
     ("DROP_RELEASE", &DROP_RELEASE),
+    ("DROP_PICK_INSTEAD", &DROP_PICK_INSTEAD),
+    ("DROP_BLOCKED_BY_ADMIN", &DROP_BLOCKED_BY_ADMIN),
     ("NOT_A_VIDEO", &NOT_A_VIDEO),
     ("READING", &READING),
     ("VERDICT_OK", &VERDICT_OK),

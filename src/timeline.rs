@@ -17,11 +17,18 @@ use eframe::egui::{self, Color32, CornerRadius, Rect, Sense, Stroke, StrokeKind,
 use crate::plan::Trim;
 use crate::theme;
 
-/// Total height of the strip, including the handles' grab area.
-const HEIGHT: f32 = 46.0;
+/// Total height of the strip, including the handles' grab area. Public because
+/// the workbench reserves a fixed slot for the transport and has to know it.
+pub const HEIGHT: f32 = 40.0;
 /// The track the region sits in.
-const TRACK: f32 = 10.0;
-const HANDLE_W: f32 = 11.0;
+///
+/// It was 10 in a strip of 46, which left 18 blank above and below and made the
+/// two handles -- 42 tall -- read as the control, with a thin line threaded
+/// between them. The kept region is what the control is ABOUT, so it gets the
+/// weight, and there is now enough band for the hatching over a discarded
+/// stretch to actually be visible as hatching.
+const TRACK: f32 = 20.0;
+const HANDLE_W: f32 = 10.0;
 /// How close a click has to be to count as grabbing a handle rather than
 /// seeking. Generous, because a handle is small and a mis-grab that seeks
 /// instead of trimming is an annoying thing to undo.
@@ -163,17 +170,40 @@ pub fn timeline(
         }
     }
 
-    let head = at(playhead.clamp(0.0, duration));
+    handle(ui, at(start), rect, allow_opening_cut, start > 0.0);
+    handle(ui, at(end), rect, true, trim.keep_until.is_some());
+
+    // LAST, and over the handles. Painted underneath, the playhead disappeared
+    // the moment it agreed with a handle -- which is exactly when it is being
+    // looked for, since grabbing a handle moves the picture to it. "The playhead
+    // did not go to the trim point" and "the playhead is hidden behind the trim
+    // point" look identical from a chair.
+    //
+    // The position drawn is the one decided THIS frame, not the one passed in:
+    // the caller only learns where a drag went after this returns, so drawing
+    // the argument would leave the marker one frame behind the pointer dragging
+    // it. Capped as well as full height, so it is findable among two handles of
+    // similar width.
+    let live = match change {
+        Change::Seek(to) => to,
+        Change::Trim {
+            opening_moved: true,
+        } => start,
+        Change::Trim {
+            opening_moved: false,
+        } => end,
+        Change::None => playhead,
+    };
+    let head = at(live.clamp(0.0, duration));
+    let painter = ui.painter();
     painter.line_segment(
         [
-            pos2(head, rect.top() + 4.0),
-            pos2(head, rect.bottom() - 4.0),
+            pos2(head, rect.top() + 3.0),
+            pos2(head, rect.bottom() - 3.0),
         ],
         Stroke::new(2.0, theme::INK),
     );
-
-    handle(ui, at(start), rect, allow_opening_cut, start > 0.0);
-    handle(ui, at(end), rect, true, trim.keep_until.is_some());
+    painter.circle_filled(pos2(head, rect.top() + 3.0), 3.5, theme::INK);
 
     change
 }
@@ -184,13 +214,15 @@ fn handle(ui: &egui::Ui, x: f32, rect: Rect, enabled: bool, engaged: bool) {
         (true, false) => theme::INK_MUTED,
         (true, true) => theme::ACCENT,
     };
+    // Full height, so it overhangs the track: a handle flush with the region it
+    // bounds is a coloured edge, not something that looks grabbable.
     let body = Rect::from_min_max(
-        pos2(x - HANDLE_W / 2.0, rect.top() + 2.0),
-        pos2(x + HANDLE_W / 2.0, rect.bottom() - 2.0),
+        pos2(x - HANDLE_W / 2.0, rect.top()),
+        pos2(x + HANDLE_W / 2.0, rect.bottom()),
     );
     ui.painter().rect(
         body,
-        CornerRadius::same(4),
+        CornerRadius::same(3),
         colour,
         Stroke::new(1.0, theme::BACKDROP),
         StrokeKind::Inside,

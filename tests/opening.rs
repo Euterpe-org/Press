@@ -62,7 +62,7 @@ fn scratch(name: &str) -> PathBuf {
 /// One frame from a file, reduced. The viewfinder is already a frame extractor,
 /// so there is no second decoding path to keep correct.
 fn frame_at(ffmpeg: &Ffmpeg, path: &std::path::Path, seconds: f64) -> Frame {
-    let preview = Preview::open(ffmpeg.binary(), path, COMPARE, COMPARE);
+    let preview = Preview::open(ffmpeg.binary(), path, COMPARE, COMPARE, 30.0);
     preview.seek(seconds);
     let deadline = Instant::now() + Duration::from_secs(20);
     while Instant::now() < deadline {

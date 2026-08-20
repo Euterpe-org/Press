@@ -1,13 +1,39 @@
 //! The window.
 //!
-//! One file at a time, and one thing to press. A charter arrives having just
-//! exported a video and wanting to know whether it will upload; everything here
-//! serves that sentence and then gets out of the way.
+//! One file at a time, and one thing to press.
 //!
-//! Four stages, and the screen only ever shows one of them: nothing loaded, a
-//! file with a verdict, a run in progress, a result. There is no settings
-//! screen, because there are no settings -- resolution, frame rate, codec and
-//! size have one correct answer each and Press knows all four.
+//! # The shape, and why it is that shape
+//!
+//! Three regions, always: a header, a body, and an action bar. **The thing to
+//! press is always in the same place** -- "make it uploadable", "stop", "another
+//! one" all appear in the bar, so the charter never has to find the button
+//! again. The bar is reserved before the body is measured, so nothing can push
+//! it off the bottom.
+//!
+//! The body is two columns: a WORKBENCH on the left -- the picture and the trim
+//! -- and a READOUT on the right, which is the verdict. Both fill their column.
+//!
+//! The window does not resize. Chasing "correct at every size" produced a layout
+//! designed for none of them, and a narrow fallback that had to be maintained
+//! and was never seen. One canvas means every element is PLACED rather than
+//! merely arranged.
+//!
+//! # Every pixel is accounted for
+//!
+//! The first version stacked widgets in order and let the leftovers fall where
+//! they fell: a preview sized to an arbitrary 560, a verdict card floating in
+//! empty space, and content that overflowed with no way to scroll to it. So:
+//!
+//! * The workbench reserves a FIXED slot for its controls and gives the picture
+//!   the rest. Nothing in it changes height for any reason -- the trim warning
+//!   used to appear below the timeline and push everything up, which moved the
+//!   control being dragged out from under the pointer, mid-drag.
+//! * The readout FILLS its column. On a fixed canvas a card that stops halfway
+//!   down leaves a rectangle of nothing beside a rectangle of something.
+//! * A run in progress, and a finished one, are CENTRED in the body -- there is
+//!   nothing else to look at, and pinning a progress bar to the top leaves the
+//!   window mostly void.
+//! * Four gaps exist (`theme::space`) and each means something.
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
@@ -20,8 +46,44 @@ use crate::i18n::{Lang, Text, text};
 use crate::plan::Trim;
 use crate::preview::Preview;
 use crate::standardise::{self, Outcome, Produced, Step, Treatment};
+use crate::theme::space;
 use crate::timeline::Change;
 use crate::{fonts, theme};
+
+/// Height of the action bar's contents. Reserved before the body is measured.
+const ACTION_TALL: f32 = 46.0;
+const ACTION_SHORT: f32 = 34.0;
+
+/// The window's own padding, one value so the body's width is derivable.
+pub const MARGIN_X: f32 = 24.0;
+pub const MARGIN_Y: f32 = 18.0;
+
+/// The workbench and the readout, and the gap between them. They add up to the
+/// body's width exactly -- that is the point of a fixed window.
+pub const WORKBENCH_W: f32 = 544.0;
+pub const READOUT_W: f32 = 340.0;
+
+/// The window's size. **Fixed** -- it does not resize.
+///
+/// Chasing "correct at every size" produced a layout that was designed for none
+/// of them: a preview at an arbitrary width, a card floating in void, a second
+/// column that only appeared if somebody dragged the window bigger, and a
+/// narrow fallback nobody ever saw but which still had to be maintained. One
+/// canvas means every element can be placed rather than merely arranged, and
+/// the branch for the size that no longer exists is gone with it.
+///
+/// 960x640 logical is the largest that still fits a 1366x768 laptop at 100% and
+/// a 1920x1080 screen at 150%, which are the two shapes that actually constrain
+/// this.
+pub const WINDOW: [f32; 2] = [960.0, 640.0];
+
+// Checked by the COMPILER. The two columns and their gap must add up to the
+// body EXACTLY -- a fixed canvas whose pieces do not tile it is a fixed canvas
+// with a seam or an overlap, and neither is something to discover on screen.
+const _: () = assert!(
+    WORKBENCH_W + space::SECTION + READOUT_W == WINDOW[0] - 2.0 * MARGIN_X,
+    "the columns do not tile the body"
+);
 
 pub struct Press {
     lang: Lang,
@@ -32,6 +94,11 @@ pub struct Press {
     /// A file chosen through the picker, waiting to be taken by the same code
     /// path a drop takes. One way in rather than two.
     pending: Option<PathBuf>,
+    /// How many times a file has been loaded. Observable because "did that drop
+    /// load once or sixty times" is otherwise invisible from outside, and the
+    /// answer decides whether a decoder is being started per gesture or per
+    /// frame.
+    loads: u64,
 }
 
 enum Stage {
@@ -86,6 +153,7 @@ impl Press {
             texture: None,
             shown_pts: f64::NAN,
             pending: None,
+            loads: 0,
         }
     }
 
@@ -96,10 +164,21 @@ impl Press {
         self.pending = Some(path.to_path_buf());
     }
 
+    /// How many files this window has loaded since it opened.
+    pub fn loads_so_far(&self) -> u64 {
+        self.loads
+    }
+
     fn t(&self, text: &'static Text) -> &'static str {
         text.get(self.lang)
     }
 }
+
+/// The header's height: the tallest thing in it, which is the language button.
+/// `button_padding.y` twice plus a line of body text, plus its stroke. Measured
+/// rather than guessed -- 34 was the guess, and the debug assertion in `region`
+/// caught it laying out 36 on the first run.
+const HEADER_H: f32 = 36.0;
 
 impl eframe::App for Press {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -107,28 +186,178 @@ impl eframe::App for Press {
         self.absorb_drops(&ctx);
         self.pump(&ctx);
 
-        egui::Frame::new()
-            .fill(theme::BACKDROP)
-            .inner_margin(egui::Margin::same(22))
-            .show(ui, |ui| {
-                ui.set_min_size(ui.available_size());
-                self.header(ui);
-                ui.add_space(14.0);
-                match &mut self.stage {
-                    Stage::Empty => {
-                        if let Some(picked) = empty(ui, self.lang, &ctx) {
-                            self.pending = Some(picked);
-                        }
-                    }
-                    Stage::Loaded(_) => self.loaded(ui, &ctx),
-                    Stage::Working(_) => self.working(ui),
-                    Stage::Finished(_) => self.finished(ui),
-                }
-            });
+        // The regions are CUT OUT of the window rather than stacked into it.
+        //
+        // Stacking, with `set_min_size` at each level to make things fill, was
+        // the previous approach and it compounded: measured on a 960x640 window
+        // it laid out 1715x1084 of content, every nested minimum pushing its
+        // parent wider. On a fixed canvas the rectangles are known in advance,
+        // so they are computed once and each region is drawn into exactly its
+        // own -- nothing can grow, because nothing is asked how big it wants to
+        // be.
+        let full = ui.max_rect();
+        ui.painter().rect_filled(full, 0, theme::BACKDROP);
+        let inner = full.shrink2(egui::vec2(MARGIN_X, MARGIN_Y));
+
+        let header = slice_top(inner, HEADER_H);
+        let rule_y = header.bottom() + space::ROW;
+
+        let action_h = self.action_height();
+        let body_bottom = if action_h > 0.0 {
+            inner.bottom() - action_h - space::ROW - 1.0 - space::BLOCK
+        } else {
+            inner.bottom()
+        };
+        let body = egui::Rect::from_min_max(
+            egui::pos2(inner.left(), rule_y + 1.0 + space::BLOCK),
+            egui::pos2(inner.right(), body_bottom),
+        );
+
+        hairline(ui, inner.x_range(), rule_y);
+        region(ui, header, |ui| self.header(ui));
+        region(ui, body, |ui| self.body(ui, &ctx));
+
+        if action_h > 0.0 {
+            let bar = slice_bottom(inner, action_h);
+            hairline(ui, inner.x_range(), bar.top() - space::ROW);
+            region(ui, bar, |ui| self.action(ui));
+        }
     }
 }
 
+fn slice_top(rect: egui::Rect, height: f32) -> egui::Rect {
+    egui::Rect::from_min_max(rect.min, egui::pos2(rect.right(), rect.top() + height))
+}
+
+fn slice_bottom(rect: egui::Rect, height: f32) -> egui::Rect {
+    egui::Rect::from_min_max(egui::pos2(rect.left(), rect.bottom() - height), rect.max)
+}
+
+fn hairline(ui: &egui::Ui, x: egui::Rangef, y: f32) {
+    ui.painter()
+        .hline(x, y, egui::Stroke::new(1.0, theme::HAIRLINE));
+}
+
+/// Draws into exactly `rect` and nowhere else.
+///
+/// The clip makes overflow impossible to SEE, which is only half of what is
+/// wanted: content that does not fit is then silently cut instead of spilling,
+/// and a cut sentence is a worse bug than a visible one because nobody notices
+/// it. So a debug build also asserts that what was laid out actually fitted --
+/// every test run is a check that the fixed canvas is big enough for what is on
+/// it, in every language.
+fn region(ui: &mut egui::Ui, rect: egui::Rect, add: impl FnOnce(&mut egui::Ui)) {
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+    child.set_clip_rect(rect);
+    add(&mut child);
+
+    let used = child.min_rect();
+    debug_assert!(
+        used.height() <= rect.height() + 1.0 && used.width() <= rect.width() + 1.0,
+        "a region laid out {:.0}x{:.0} into {:.0}x{:.0} and the excess was clipped away",
+        used.width(),
+        used.height(),
+        rect.width(),
+        rect.height(),
+    );
+}
+
 impl Press {
+    fn action_height(&self) -> f32 {
+        match &self.stage {
+            Stage::Empty => 0.0,
+            Stage::Loaded(loaded) => {
+                if self.ffmpeg.is_some() && loaded.facts.is_some() {
+                    ACTION_TALL
+                } else {
+                    0.0
+                }
+            }
+            Stage::Working(working) => {
+                if working.forced {
+                    // The abandon button carries a sentence under it.
+                    ACTION_SHORT + space::TIGHT + 18.0
+                } else {
+                    ACTION_SHORT
+                }
+            }
+            Stage::Finished(_) => ACTION_SHORT,
+        }
+    }
+
+    fn body(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        match &mut self.stage {
+            Stage::Empty => {
+                if let Some(picked) = drop_zone(ui, self.lang, ctx) {
+                    self.pending = Some(picked);
+                }
+            }
+            Stage::Loaded(_) => self.loaded(ui, ctx),
+            Stage::Working(_) => self.working(ui),
+            Stage::Finished(_) => self.finished(ui),
+        }
+    }
+
+    /// The one thing to press, wherever the window happens to be.
+    fn action(&mut self, ui: &mut egui::Ui) {
+        let lang = self.lang;
+        match &self.stage {
+            Stage::Empty => {}
+            Stage::Loaded(loaded) => {
+                if self.ffmpeg.is_some() && loaded.facts.is_some() {
+                    ui.vertical_centered(|ui| {
+                        if theme::primary(ui, text::START.get(lang)).clicked() {
+                            self.begin();
+                        }
+                    });
+                }
+            }
+            Stage::Working(working) => {
+                let label = if working.forced {
+                    &text::CANCEL_ABANDON
+                } else {
+                    &text::CANCEL_KEEP
+                };
+                let forced = working.forced;
+                let cancel = working.cancel.clone();
+                ui.vertical_centered(|ui| {
+                    if theme::quiet(ui, label.get(lang)).clicked() {
+                        cancel.request();
+                    }
+                    if forced {
+                        ui.add_space(space::TIGHT);
+                        theme::muted(ui, text::CANCEL_ABANDON_HINT.get(lang));
+                    }
+                });
+            }
+            Stage::Finished(finished) => {
+                let produced = match &finished.outcome {
+                    Outcome::Produced(produced) => Some(produced.path.clone()),
+                    _ => None,
+                };
+                let mut again = false;
+                let mut reveal_it = None;
+                ui.vertical_centered(|ui| {
+                    ui.horizontal(|ui| {
+                        if let Some(path) = produced
+                            && theme::quiet(ui, text::SHOW_IN_FOLDER.get(lang)).clicked()
+                        {
+                            reveal_it = Some(path);
+                        }
+                        again = theme::quiet(ui, text::ANOTHER.get(lang)).clicked();
+                    });
+                });
+                if let Some(path) = reveal_it {
+                    reveal(&path);
+                }
+                if again {
+                    self.stage = Stage::Empty;
+                    self.texture = None;
+                }
+            }
+        }
+    }
+
     fn header(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.label(
@@ -137,6 +366,7 @@ impl Press {
                     .strong()
                     .color(theme::INK),
             );
+            ui.add_space(space::TIGHT);
             ui.label(
                 egui::RichText::new(self.t(&text::TAGLINE))
                     .size(theme::size::SMALL)
@@ -160,12 +390,6 @@ impl Press {
                     });
             });
         });
-        ui.add_space(6.0);
-        ui.painter().hline(
-            ui.max_rect().x_range(),
-            ui.cursor().top(),
-            egui::Stroke::new(1.0, theme::HAIRLINE),
-        );
     }
 
     /// A file dropped anywhere on the window replaces whatever is loaded --
@@ -184,6 +408,7 @@ impl Press {
     }
 
     fn load(&mut self, path: &Path) {
+        self.loads += 1;
         self.texture = None;
         self.shown_pts = f64::NAN;
 
@@ -197,7 +422,7 @@ impl Press {
 
         let preview = match (&facts, &self.ffmpeg) {
             (Some(f), Some(ffmpeg)) => {
-                let preview = Preview::open(ffmpeg.binary(), path, f.width, f.height);
+                let preview = Preview::open(ffmpeg.binary(), path, f.width, f.height, f.fps);
                 // Something on screen immediately: an empty frame under a
                 // verdict reads as a decoder that failed.
                 preview.seek(0.0);
@@ -219,10 +444,37 @@ impl Press {
 
     /// Drain the worker and keep the window repainting while anything moves.
     fn pump(&mut self, ctx: &egui::Context) {
-        if let Stage::Loaded(loaded) = &self.stage
-            && loaded.preview.as_ref().is_some_and(Preview::playing)
+        if let Stage::Loaded(loaded) = &mut self.stage
+            && let Some(preview) = &loaded.preview
         {
-            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+            // Decoded frames arrive on a worker thread, and egui only redraws
+            // when something asks it to. Without this the first frame appears
+            // when the charter happens to move the mouse -- which looked like it
+            // worked, right up until a screenshot caught a window with no
+            // picture in it. A viewfinder that needs to be nudged is broken.
+            let interval = if preview.playing() { 16 } else { 90 };
+            ctx.request_repaint_after(std::time::Duration::from_millis(interval));
+
+            // THE PLAYHEAD FOLLOWS THE PICTURE. It did not: `at` only ever moved
+            // when the charter moved it, so pressing play started the video and
+            // left the marker and the clock sitting exactly where they were --
+            // a transport that transports nothing. The decoded frame knows where
+            // it is, so that is what the position now is.
+            if preview.playing()
+                && let Some(frame) = preview.frame()
+            {
+                loaded.at = frame.pts;
+
+                // Playback stops at the trim, because past the trim is material
+                // the charter has already decided nobody will see. A preview
+                // that runs on into it is previewing a different video.
+                if let Some(end) = loaded.trim.keep_until
+                    && frame.pts >= end
+                {
+                    preview.pause();
+                    loaded.at = end;
+                }
+            }
         }
 
         let Stage::Working(working) = &mut self.stage else {
@@ -298,52 +550,78 @@ impl Press {
     }
 }
 
-// ── the four screens ─────────────────────────────────────────────────────
+// ── the four bodies ──────────────────────────────────────────────────────
 
-fn empty(ui: &mut egui::Ui, lang: Lang, ctx: &egui::Context) -> Option<PathBuf> {
+/// Fills the body, because there is nothing else in it and a drop target that
+/// does not look like the whole window is a smaller target than it needs to be.
+fn drop_zone(ui: &mut egui::Ui, lang: Lang, ctx: &egui::Context) -> Option<PathBuf> {
     let hovering = ctx.input(|i| !i.raw.hovered_files.is_empty());
-    let available = ui.available_size();
+    let (rect, response) = ui.allocate_exact_size(ui.available_size(), egui::Sense::click());
+    // Windows refuses to let a medium-integrity Explorer drop onto a high-
+    // integrity window, and the entire visible result is a forbidden cursor --
+    // no message, no log, nothing but a tool that appears broken. Clicking still
+    // works, so the zone says which half of itself is dead and why. See
+    // `crate::elevation`.
+    let blocked = crate::elevation::is_elevated();
 
-    let (rect, response) = ui.allocate_exact_size(available, egui::Sense::click());
-    let stroke = if hovering {
-        egui::Stroke::new(2.0, theme::ACCENT)
-    } else {
-        egui::Stroke::new(1.5, theme::HAIRLINE)
-    };
     ui.painter().rect(
-        rect.shrink(2.0),
+        rect.shrink(1.0),
         egui::CornerRadius::same(theme::RADIUS + 6),
         if hovering {
             theme::PANEL_RAISED
         } else {
             theme::PANEL
         },
-        stroke,
+        if hovering {
+            egui::Stroke::new(2.0, theme::ACCENT)
+        } else {
+            egui::Stroke::new(1.5, theme::HAIRLINE)
+        },
         egui::StrokeKind::Inside,
     );
 
-    let prompt = if hovering {
-        &text::DROP_RELEASE
-    } else {
-        &text::DROP_PROMPT
+    // When dragging is blocked the headline stops promising it: "click to choose
+    // a video" is the only instruction that is actually true, and the sentence
+    // under it explains why the other half is missing.
+    let prompt = match (blocked, hovering) {
+        (true, _) => &text::DROP_PICK_INSTEAD,
+        (false, true) => &text::DROP_RELEASE,
+        (false, false) => &text::DROP_PROMPT,
     };
+    // The pair sits on the optical centre rather than the geometric one: two
+    // lines centred as a block read as one thing, which is what they are.
     ui.painter().text(
-        rect.center() - egui::vec2(0.0, 14.0),
+        rect.center() - egui::vec2(0.0, space::ROW),
         egui::Align2::CENTER_CENTER,
         prompt.get(lang),
         egui::FontId::proportional(theme::size::HERO),
-        if hovering { theme::ACCENT } else { theme::INK },
+        if hovering && !blocked {
+            theme::ACCENT
+        } else {
+            theme::INK
+        },
     );
-    ui.painter().text(
-        rect.center() + egui::vec2(0.0, 20.0),
-        egui::Align2::CENTER_CENTER,
-        text::DROP_HINT.get(lang),
-        egui::FontId::proportional(theme::size::BODY),
-        theme::INK_MUTED,
-    );
+    if blocked {
+        wrapped_centre(
+            ui,
+            rect.center() + egui::vec2(0.0, space::BLOCK),
+            text::DROP_BLOCKED_BY_ADMIN.get(lang),
+            theme::NOTICE,
+            rect.width().min(460.0),
+        );
+    } else {
+        ui.painter().text(
+            rect.center() + egui::vec2(0.0, space::BLOCK),
+            egui::Align2::CENTER_CENTER,
+            text::DROP_HINT.get(lang),
+            egui::FontId::proportional(theme::size::BODY),
+            theme::INK_MUTED,
+        );
+    }
 
     // Handed back rather than loaded here, so a picked file and a dropped one
-    // take the same path in.
+    // take the same path in. The click works whatever the integrity level is,
+    // which is the whole reason the elevated case has something to say.
     if response.clicked() {
         return rfd::FileDialog::new()
             .add_filter("Video", &["mp4", "mov", "mkv", "webm", "m4v"])
@@ -352,124 +630,127 @@ fn empty(ui: &mut egui::Ui, lang: Lang, ctx: &egui::Context) -> Option<PathBuf> 
     None
 }
 
+/// A sentence painted centred and wrapped, for the one place with no widget to
+/// hang it off -- the drop zone is a single painted rectangle by design.
+fn wrapped_centre(
+    ui: &egui::Ui,
+    centre: egui::Pos2,
+    body: &str,
+    colour: egui::Color32,
+    width: f32,
+) {
+    let mut job = egui::text::LayoutJob::simple(
+        body.to_owned(),
+        egui::FontId::proportional(theme::size::BODY),
+        colour,
+        width,
+    );
+    job.halign = egui::Align::Center;
+    let galley = ui.painter().layout_job(job);
+    let top = centre - egui::vec2(0.0, galley.size().y / 2.0);
+    ui.painter().galley(top, galley, colour);
+}
+
 impl Press {
     fn loaded(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        self.refresh_texture(ctx);
         let lang = self.lang;
+        let texture = self.texture.clone();
+        let no_encoder = self.ffmpeg.is_none();
         let Stage::Loaded(loaded) = &mut self.stage else {
             return;
         };
 
-        // The picture, if there is one to show.
-        if let Some(preview) = &loaded.preview
-            && let Some(frame) = preview.frame()
-            && (frame.pts != self.shown_pts || self.texture.is_none())
-        {
-            let image = egui::ColorImage::from_rgba_unmultiplied(
-                [frame.width as usize, frame.height as usize],
-                &frame.rgba,
-            );
-            match &mut self.texture {
-                Some(handle) => handle.set(image, egui::TextureOptions::LINEAR),
-                None => {
-                    self.texture =
-                        Some(ctx.load_texture("preview", image, egui::TextureOptions::LINEAR));
-                }
-            }
-            self.shown_pts = frame.pts;
-        }
+        let body = ui.max_rect();
+        let workbench = egui::Rect::from_min_max(
+            body.min,
+            egui::pos2(body.left() + WORKBENCH_W, body.bottom()),
+        );
+        let readout =
+            egui::Rect::from_min_max(egui::pos2(body.right() - READOUT_W, body.top()), body.max);
 
-        if let Some(texture) = &self.texture {
-            let width = ui.available_width().min(560.0);
-            let aspect = texture.size()[1] as f32 / texture.size()[0] as f32;
-            ui.vertical_centered(|ui| {
-                ui.add(
-                    egui::Image::new(texture)
-                        .fit_to_exact_size(egui::vec2(width, width * aspect))
-                        .corner_radius(egui::CornerRadius::same(theme::RADIUS)),
-                );
-            });
-            ui.add_space(8.0);
-            scrubber(ui, lang, loaded);
-            ui.add_space(12.0);
-        }
-
-        verdict_card(ui, lang, loaded);
-        ui.add_space(14.0);
-
-        let can_run = self.ffmpeg.is_some() && loaded.facts.is_some();
-        if self.ffmpeg.is_none() {
-            ui.label(egui::RichText::new(self.t(&text::NO_ENCODER)).color(theme::ALARM));
-        }
-        if can_run {
-            ui.vertical_centered(|ui| {
-                if theme::primary(ui, text::START.get(lang)).clicked() {
-                    self.begin();
-                }
-            });
-        }
+        region(ui, workbench, |ui| {
+            workbench_column(ui, lang, loaded, texture.as_ref());
+        });
+        region(ui, readout, |ui| {
+            verdict_card(ui, lang, loaded, readout.height(), no_encoder);
+        });
     }
 
+    fn refresh_texture(&mut self, ctx: &egui::Context) {
+        let Stage::Loaded(loaded) = &self.stage else {
+            return;
+        };
+        let Some(preview) = &loaded.preview else {
+            return;
+        };
+        let Some(frame) = preview.frame() else {
+            return;
+        };
+        if frame.pts == self.shown_pts && self.texture.is_some() {
+            return;
+        }
+
+        let image = egui::ColorImage::from_rgba_unmultiplied(
+            [frame.width as usize, frame.height as usize],
+            &frame.rgba,
+        );
+        match &mut self.texture {
+            Some(handle) => handle.set(image, egui::TextureOptions::LINEAR),
+            None => {
+                self.texture =
+                    Some(ctx.load_texture("preview", image, egui::TextureOptions::LINEAR))
+            }
+        }
+        self.shown_pts = frame.pts;
+    }
+
+    /// Centred in the body: there is nothing else to look at, and a progress bar
+    /// pinned to the top leaves the rest of the window empty for no reason.
     fn working(&mut self, ui: &mut egui::Ui) {
         let lang = self.lang;
-        let Stage::Working(working) = &mut self.stage else {
+        let Stage::Working(working) = &self.stage else {
             return;
         };
 
-        theme::card(ui, |ui| {
-            ui.label(
-                egui::RichText::new(file_name(&working.path))
-                    .size(theme::size::SMALL)
-                    .color(theme::INK_MUTED),
-            );
-            ui.add_space(10.0);
+        let (label, fraction) = match &working.step {
+            Step::Reading => (text::READING.get(lang).to_owned(), None),
+            Step::Copying(p) => (
+                text::STEP_COPYING.get(lang).to_owned(),
+                p.and_then(|p| p.fraction),
+            ),
+            Step::Encoding { progress, .. } => {
+                let fraction = progress.and_then(|p| p.fraction);
+                let template = if working.forced {
+                    &text::STEP_ENCODING_FORCED
+                } else {
+                    &text::STEP_ENCODING
+                };
+                let percent =
+                    fraction.map_or_else(|| "…".to_owned(), |f| format!("{:.0}%", f * 100.0));
+                (template.get(lang).replace("{percent}", &percent), fraction)
+            }
+            Step::Verifying => (text::STEP_VERIFYING.get(lang).to_owned(), None),
+        };
+        let name = file_name(&working.path);
 
-            let (label, fraction) = match &working.step {
-                Step::Reading => (text::READING.get(lang).to_owned(), None),
-                Step::Copying(p) => (
-                    text::STEP_COPYING.get(lang).to_owned(),
-                    p.and_then(|p| p.fraction),
-                ),
-                Step::Encoding { progress, .. } => {
-                    let fraction = progress.and_then(|p| p.fraction);
-                    let template = if working.forced {
-                        &text::STEP_ENCODING_FORCED
-                    } else {
-                        &text::STEP_ENCODING
-                    };
-                    let percent =
-                        fraction.map_or_else(|| "…".to_owned(), |f| format!("{:.0}%", f * 100.0));
-                    (template.get(lang).replace("{percent}", &percent), fraction)
-                }
-                Step::Verifying => (text::STEP_VERIFYING.get(lang).to_owned(), None),
-            };
-
-            ui.label(egui::RichText::new(label).size(theme::size::TITLE));
-            ui.add_space(8.0);
-            let bar = egui::ProgressBar::new(fraction.unwrap_or(0.0) as f32)
-                .desired_height(8.0)
-                .corner_radius(egui::CornerRadius::same(4))
-                .fill(theme::ACCENT);
-            ui.add(if fraction.is_some() {
-                bar
-            } else {
-                bar.animate(true)
+        centred(ui, "working", |ui| {
+            theme::card(ui, |ui| {
+                ui.set_width(ui.available_width());
+                theme::muted(ui, &name);
+                ui.add_space(space::ROW);
+                ui.label(egui::RichText::new(label).size(theme::size::TITLE));
+                ui.add_space(space::ROW);
+                let bar = egui::ProgressBar::new(fraction.unwrap_or(0.0) as f32)
+                    .desired_height(8.0)
+                    .corner_radius(egui::CornerRadius::same(4))
+                    .fill(theme::ACCENT);
+                ui.add(if fraction.is_some() {
+                    bar
+                } else {
+                    bar.animate(true)
+                });
             });
-
-            ui.add_space(14.0);
-            // The same button means two different things, so it says two
-            // different things: with a compliant copy already in hand, stopping
-            // keeps it; without one, stopping keeps nothing.
-            let label = if working.forced {
-                &text::CANCEL_ABANDON
-            } else {
-                &text::CANCEL_KEEP
-            };
-            if theme::quiet(ui, label.get(lang)).clicked() {
-                working.cancel.request();
-            }
-            if working.forced {
-                theme::muted(ui, text::CANCEL_ABANDON_HINT.get(lang));
-            }
         });
     }
 
@@ -480,61 +761,248 @@ impl Press {
         };
         let source_bytes = finished.source_bytes;
 
-        let mut open_folder: Option<PathBuf> = None;
-        theme::card(ui, |ui| match &finished.outcome {
-            Outcome::Produced(produced) => {
-                theme::heading(ui, text::DONE.get(lang), theme::GOOD);
-                ui.add_space(6.0);
-                ui.label(
-                    text::DONE_SIZE
-                        .get(lang)
-                        .replace("{before}", &megabytes(source_bytes))
-                        .replace("{after}", &megabytes(produced.bytes)),
-                );
-                ui.add_space(4.0);
-                for line in outcome_notes(produced, lang) {
-                    theme::muted(ui, &line);
+        centred(ui, "finished", |ui| {
+            theme::card(ui, |ui| {
+                ui.set_width(ui.available_width());
+                match &finished.outcome {
+                    Outcome::Produced(produced) => {
+                        theme::heading(ui, text::DONE.get(lang), theme::GOOD);
+                        ui.add_space(space::TIGHT);
+                        ui.label(
+                            text::DONE_SIZE
+                                .get(lang)
+                                .replace("{before}", &megabytes(source_bytes))
+                                .replace("{after}", &megabytes(produced.bytes)),
+                        );
+                        for line in outcome_notes(produced, lang) {
+                            ui.add_space(space::TIGHT);
+                            theme::muted(ui, &line);
+                        }
+                    }
+                    Outcome::AlreadyStandard => {
+                        theme::heading(ui, text::ALREADY_STANDARD.get(lang), theme::GOOD);
+                    }
+                    Outcome::Cancelled => {
+                        theme::heading(ui, text::CANCELLED.get(lang), theme::INK_MUTED);
+                    }
+                    Outcome::Failed(reason) => {
+                        theme::heading(ui, text::FAILED.get(lang), theme::ALARM);
+                        ui.add_space(space::TIGHT);
+                        ui.label(egui::RichText::new(reason).size(theme::size::SMALL));
+                    }
                 }
-                ui.add_space(12.0);
-                open_folder = Some(produced.path.clone());
-            }
-            Outcome::AlreadyStandard => {
-                theme::heading(ui, text::ALREADY_STANDARD.get(lang), theme::GOOD);
-            }
-            Outcome::Cancelled => {
-                theme::heading(ui, text::CANCELLED.get(lang), theme::INK_MUTED);
-            }
-            Outcome::Failed(reason) => {
-                theme::heading(ui, text::FAILED.get(lang), theme::ALARM);
-                ui.add_space(6.0);
-                ui.label(egui::RichText::new(reason).size(theme::size::SMALL));
-            }
-        });
-
-        ui.add_space(14.0);
-        ui.horizontal(|ui| {
-            if let Some(path) = open_folder
-                && theme::quiet(ui, text::SHOW_IN_FOLDER.get(lang)).clicked()
-            {
-                reveal(&path);
-            }
-            if theme::quiet(ui, text::ANOTHER.get(lang)).clicked() {
-                self.stage = Stage::Empty;
-                self.texture = None;
-            }
+            });
         });
     }
 }
 
-/// The findings, and what is about to be done about each of them.
-fn verdict_card(ui: &mut egui::Ui, lang: Lang, loaded: &Loaded) {
-    theme::card(ui, |ui| {
-        ui.label(
-            egui::RichText::new(file_name(&loaded.path))
-                .size(theme::size::SMALL)
-                .color(theme::INK_MUTED),
+/// Centres a block in whatever is left, at whatever height it turns out to be.
+///
+/// The height is not guessed: it is measured after drawing and remembered, so
+/// the next frame centres the real thing. A guessed height is a card that is
+/// either clipped or floating slightly off-centre, and neither is visible enough
+/// to notice or invisible enough to ignore. The first frame after a change is
+/// off by the difference and the repaint timer settles it before an eye could
+/// follow.
+fn centred(ui: &mut egui::Ui, id: &str, add: impl FnOnce(&mut egui::Ui)) {
+    let id = egui::Id::new(id);
+    let known: f32 = ui.data(|d| d.get_temp(id)).unwrap_or(140.0);
+
+    let slack = ((ui.available_height() - known) / 2.0).max(0.0);
+    ui.add_space(slack);
+
+    let width = ui.available_width().min(520.0);
+    let mut measured = known;
+    ui.vertical_centered(|ui| {
+        let start = ui.cursor().top();
+        ui.allocate_ui(egui::vec2(width, ui.available_height()), add);
+        measured = ui.cursor().top() - start;
+    });
+
+    if (measured - known).abs() > 0.5 {
+        ui.data_mut(|d| d.insert_temp(id, measured));
+        ui.ctx().request_repaint();
+    }
+}
+
+/// The transport's height, reserved WHOLE and never varying.
+///
+/// This is the fix for the worst bug the layout has had: the trim warning used
+/// to appear below the timeline when the opening handle left zero, and the
+/// bottom-up layout pushed everything above it upwards -- so the control being
+/// dragged MOVED under the pointer, mid-drag. Direct manipulation with a target
+/// that relocates while you manipulate it is not a rough edge, it is the thing
+/// not working.
+///
+/// The warning went to the readout, where consequences belong, and this block
+/// became a constant: timeline, a row, a summary line, and the gaps between.
+/// Nothing in the workbench changes height for any reason, so the preview never
+/// resizes either and the picture does not jump when a handle is touched.
+const TRANSPORT_H: f32 = crate::timeline::HEIGHT + space::TIGHT + ROW_H + space::TIGHT + LINE_H;
+/// One line of small text, and one row of controls.
+const LINE_H: f32 = 18.0;
+const ROW_H: f32 = 34.0;
+
+fn workbench_column(
+    ui: &mut egui::Ui,
+    lang: Lang,
+    loaded: &mut Loaded,
+    texture: Option<&egui::TextureHandle>,
+) {
+    let column = ui.max_rect();
+    let controls = slice_bottom(column, TRANSPORT_H);
+    let glass = egui::Rect::from_min_max(
+        column.min,
+        egui::pos2(column.right(), controls.top() - space::ROW),
+    );
+
+    region(ui, glass, |ui| viewport(ui, texture, glass.size()));
+    region(ui, controls, |ui| transport(ui, lang, loaded));
+}
+
+/// A framed viewport with the picture letterboxed inside it.
+///
+/// The frame is the thing that fills the column; the video sits in the middle of
+/// it at whatever size its own shape allows. That is the difference between a
+/// deliberate viewport and leftover space: a 4:3 source in a 16:9 column leaves
+/// bars either way, and bars inside a drawn frame read as a viewport while the
+/// same bars against the page read as a layout that did not work out.
+fn viewport(ui: &mut egui::Ui, texture: Option<&egui::TextureHandle>, room: egui::Vec2) {
+    let (rect, _) = ui.allocate_exact_size(room, egui::Sense::hover());
+    ui.painter().rect(
+        rect,
+        egui::CornerRadius::same(theme::RADIUS),
+        theme::BACKDROP,
+        egui::Stroke::new(1.0, theme::HAIRLINE),
+        egui::StrokeKind::Inside,
+    );
+
+    let Some(texture) = texture else {
+        return;
+    };
+    let size = texture.size();
+    let (w, h) = (size[0] as f32, size[1] as f32);
+    // One pixel of inset, so the picture never sits on the frame's own stroke.
+    let inner = rect.shrink(1.0);
+    let scale = (inner.width() / w).min(inner.height() / h);
+    let drawn = egui::vec2(w * scale, h * scale);
+    egui::Image::new(texture)
+        .corner_radius(egui::CornerRadius::same(theme::RADIUS - 1))
+        .paint_at(ui, egui::Rect::from_center_size(rect.center(), drawn));
+}
+
+/// Transport, timeline and what the trim currently means. Written bottom-up so
+/// it can be dropped into a bottom-up layout unchanged.
+fn transport(ui: &mut egui::Ui, lang: Lang, loaded: &mut Loaded) {
+    // Destructured so the preview, the position and the trim are three separate
+    // borrows: the transport reads one and writes the others in the same breath,
+    // which through `loaded.` alone the compiler cannot allow.
+    let Loaded {
+        facts,
+        preview,
+        at,
+        trim,
+        ..
+    } = loaded;
+    let Some(facts) = facts.as_ref() else {
+        return;
+    };
+    let duration = facts.duration.max(0.001);
+
+    // A source's last frame sits one interval BEFORE its duration, so asking the
+    // decoder for a picture at exactly `duration` asks for one that does not
+    // exist and it returns nothing. The scrubber can be dragged to the very end,
+    // so the position it asks to SEE is held just inside the material -- while
+    // the position it reports, and the position the trim uses, are untouched.
+    let inside = |at: f64| (at - 1.0 / 24.0).clamp(0.0, duration);
+
+    // Top-down, in fixed slots. The timeline sits FIRST -- directly under the
+    // picture it scrubs -- and everything after it is a readout of what the
+    // handles currently say.
+    // Touching the strip at all stops playback: the charter is aiming now, and a
+    // picture that keeps moving under a handle being placed is aiming at a
+    // moving target.
+    let moved = match crate::timeline::timeline(ui, duration, *at, trim, true) {
+        Change::None => None,
+        Change::Seek(to) => Some(to),
+        // Dragging a handle moves the picture AND the playhead to that handle,
+        // because the frame being cut to is the entire reason to look at a
+        // preview at all.
+        Change::Trim { opening_moved } => Some(if opening_moved {
+            trim.cut_opening
+        } else {
+            trim.keep_until.unwrap_or(duration)
+        }),
+    };
+    if let Some(to) = moved {
+        *at = to;
+        if let Some(preview) = preview.as_ref() {
+            preview.seek(inside(to));
+        }
+    }
+    ui.add_space(space::TIGHT);
+
+    // One row, one height, whatever is in it. The transport on the left, the way
+    // back on the right.
+    ui.allocate_ui(egui::vec2(ui.available_width(), ROW_H), |ui| {
+        ui.horizontal_centered(|ui| {
+            if let Some(preview) = preview.as_ref() {
+                let playing = preview.playing();
+                if theme::transport_button(ui, if playing { "⏸" } else { "▶" }).clicked() {
+                    if playing {
+                        preview.pause();
+                    } else {
+                        // Play always plays something. Sitting at the end of the
+                        // kept region -- which is where the last playback left
+                        // the head, and where dragging the end handle puts it --
+                        // it rewinds to the start of that region instead of
+                        // starting a decoder that immediately runs out.
+                        let end = trim.keep_until.unwrap_or(duration);
+                        let from = if *at >= end - 0.05 || *at < trim.cut_opening {
+                            trim.cut_opening
+                        } else {
+                            *at
+                        };
+                        *at = from;
+                        preview.play(from);
+                    }
+                }
+                ui.add_space(space::ROW);
+            }
+
+            // Monospaced, so the digits do not change width as they count and
+            // shove everything beside them left and right.
+            theme::clock_pair(ui, &clock(*at), &clock(duration));
+
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if !trim.is_untouched() && theme::chip(ui, text::TRIM_RESET.get(lang)).clicked() {
+                    *trim = Trim::default();
+                }
+            });
+        });
+    });
+    ui.add_space(space::TIGHT);
+
+    if trim.is_untouched() {
+        theme::muted(ui, text::TRIM_NONE.get(lang));
+    } else {
+        let kept = trim.kept_seconds(duration);
+        theme::muted(
+            ui,
+            &text::TRIM_TAIL_ONLY
+                .get(lang)
+                .replace("{kept}", &clock(kept))
+                .replace("{cut}", &clock(duration - kept)),
         );
-        ui.add_space(8.0);
+    }
+}
+
+/// The findings, and what is about to be done about each of them.
+fn verdict_card(ui: &mut egui::Ui, lang: Lang, loaded: &Loaded, tall: f32, no_encoder: bool) {
+    let opening = loaded.trim.cut_opening;
+    theme::card_of_height(ui, tall, |ui| {
+        theme::muted(ui, &file_name(&loaded.path));
+        ui.add_space(space::TIGHT);
 
         let Some(facts) = &loaded.facts else {
             theme::heading(ui, text::VERDICT_UNREADABLE.get(lang), theme::ALARM);
@@ -546,22 +1014,55 @@ fn verdict_card(ui: &mut egui::Ui, lang: Lang, loaded: &Loaded) {
         } else {
             theme::heading(ui, text::VERDICT_WILL_FIX.get(lang), theme::NOTICE);
         }
-        ui.add_space(4.0);
+        ui.add_space(space::TIGHT);
         theme::muted(ui, &shape(facts, loaded.source_bytes));
-        ui.add_space(10.0);
 
         // Every finding, not only the first. The gate reports one violation
         // because it is refusing; Press is fixing, so it lists all of them --
         // being told about the audio and then, on the next attempt, about the
         // frame rate is the round trip this whole tool exists to remove.
         for (finding, fix) in findings(facts, loaded.source_bytes, lang) {
+            ui.add_space(space::ROW);
             ui.horizontal_top(|ui| {
                 ui.label(egui::RichText::new("•").color(theme::NOTICE));
                 ui.vertical(|ui| {
                     ui.label(egui::RichText::new(finding).color(theme::INK));
+                    ui.add_space(2.0);
                     theme::muted(ui, &fix);
                 });
             });
+        }
+
+        // The consequence of the one choice the charter makes. It lives HERE,
+        // not under the timeline, and that is not cosmetic: below the timeline
+        // it appeared when the opening handle left zero and pushed the whole
+        // workbench upward, moving the control being dragged out from under the
+        // pointer. Consequences belong where consequences are stated.
+        if opening > 0.0 {
+            ui.add_space(space::BLOCK);
+            ui.label(
+                egui::RichText::new(
+                    text::TRIM_HEAD_WARNING
+                        .get(lang)
+                        .replace("{shift}", &clock(opening)),
+                )
+                .size(theme::size::SMALL)
+                .color(theme::NOTICE),
+            );
+            ui.add_space(space::TIGHT);
+            theme::muted(ui, text::TRIM_HEAD_COSTS_REENCODE.get(lang));
+        }
+
+        // Inside the card, not floating beneath it: it is part of the verdict --
+        // "and by the way nothing can be done about any of this" -- and a line
+        // outside the panel was a line the column had no room reserved for.
+        if no_encoder {
+            ui.add_space(space::BLOCK);
+            ui.label(
+                egui::RichText::new(text::NO_ENCODER.get(lang))
+                    .size(theme::size::SMALL)
+                    .color(theme::ALARM),
+            );
         }
     });
 }
@@ -628,89 +1129,6 @@ fn findings(facts: &Facts, source_bytes: u64, lang: Lang) -> Vec<(String, String
         ));
     }
     out
-}
-
-/// The timeline, the transport, and what the trim currently means in words.
-fn scrubber(ui: &mut egui::Ui, lang: Lang, loaded: &mut Loaded) {
-    let Some(facts) = &loaded.facts else { return };
-    let duration = facts.duration.max(0.001);
-
-    match crate::timeline::timeline(ui, duration, loaded.at, &mut loaded.trim, true) {
-        Change::None => {}
-        Change::Seek(at) => {
-            loaded.at = at;
-            if let Some(preview) = &loaded.preview {
-                preview.seek(at);
-            }
-        }
-        // Dragging a handle moves the picture to that handle, because the frame
-        // being cut to is the entire reason to look at a preview at all.
-        Change::Trim { opening_moved } => {
-            let at = if opening_moved {
-                loaded.trim.cut_opening
-            } else {
-                loaded.trim.keep_until.unwrap_or(duration)
-            };
-            loaded.at = at;
-            if let Some(preview) = &loaded.preview {
-                preview.seek((at - 0.05).max(0.0));
-            }
-        }
-    }
-
-    ui.horizontal(|ui| {
-        if let Some(preview) = &loaded.preview {
-            let playing = preview.playing();
-            if ui.button(if playing { "⏸" } else { "▶" }).clicked() {
-                if playing {
-                    preview.pause();
-                } else {
-                    preview.play(loaded.at);
-                }
-            }
-        }
-        theme::muted(ui, &format!("{} / {}", clock(loaded.at), clock(duration)));
-
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if !loaded.trim.is_untouched() && theme::quiet(ui, text::TRIM_RESET.get(lang)).clicked()
-            {
-                loaded.trim = Trim::default();
-            }
-        });
-    });
-
-    // What the handles currently mean, in words. The picture shows WHICH part
-    // survives; only a sentence can say what that costs.
-    if loaded.trim.is_untouched() {
-        theme::muted(ui, text::TRIM_NONE.get(lang));
-        return;
-    }
-
-    let kept = loaded.trim.kept_seconds(duration);
-    let cut = duration - kept;
-    theme::muted(
-        ui,
-        &text::TRIM_TAIL_ONLY
-            .get(lang)
-            .replace("{kept}", &clock(kept))
-            .replace("{cut}", &clock(cut)),
-    );
-
-    // The opening is the half with consequences, so it gets said in full and in
-    // the colour that means "read this", not tucked under the same grey line.
-    if loaded.trim.moves_the_opening() {
-        ui.add_space(4.0);
-        ui.label(
-            egui::RichText::new(
-                text::TRIM_HEAD_WARNING
-                    .get(lang)
-                    .replace("{shift}", &clock(loaded.trim.cut_opening)),
-            )
-            .size(theme::size::SMALL)
-            .color(theme::NOTICE),
-        );
-        theme::muted(ui, text::TRIM_HEAD_COSTS_REENCODE.get(lang));
-    }
 }
 
 fn outcome_notes(produced: &Produced, lang: Lang) -> Vec<String> {
@@ -786,52 +1204,49 @@ fn verdict_matches_findings(facts: &Facts, bytes: u64, lang: Lang) -> bool {
 mod tests {
     use super::*;
 
+    fn every_fixture(mut check: impl FnMut(&Facts, u64, &Path)) {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+        let mut seen = 0;
+        for entry in std::fs::read_dir(dir).expect("fixtures") {
+            let path = entry.expect("entry").path();
+            if path.extension().is_none_or(|e| e != "mp4") {
+                continue;
+            }
+            let bytes = std::fs::read(&path).expect("fixture");
+            let Some(facts) = gate::probe(&bytes) else {
+                continue;
+            };
+            check(&facts, bytes.len() as u64, &path);
+            seen += 1;
+        }
+        assert!(seen > 10, "expected the fixture set, found {seen}");
+    }
+
     /// The screen lists every finding while the gate reports only the first.
     /// They still have to agree on WHETHER anything is wrong -- a file the gate
     /// refuses with nothing listed, or a file it accepts with a bullet under it,
     /// is a window that contradicts the thing it exists to report.
     #[test]
     fn the_screen_and_the_gate_never_disagree_about_whether_it_passes() {
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
-        let mut checked = 0;
-        for entry in std::fs::read_dir(dir).expect("fixtures") {
-            let path = entry.expect("entry").path();
-            if path.extension().is_none_or(|e| e != "mp4") {
-                continue;
-            }
-            let bytes = std::fs::read(&path).expect("fixture");
-            let Some(facts) = gate::probe(&bytes) else {
-                continue;
-            };
+        every_fixture(|facts, bytes, path| {
             for lang in Lang::ALL {
                 assert!(
-                    verdict_matches_findings(&facts, bytes.len() as u64, lang),
+                    verdict_matches_findings(facts, bytes, lang),
                     "{} disagrees with the gate in {}",
                     path.display(),
                     lang.endonym()
                 );
             }
-            checked += 1;
-        }
-        assert!(checked > 10, "expected the fixture set, found {checked}");
+        });
     }
 
     /// A finding that renders with its braces still in it is a placeholder whose
     /// name was changed on one side only.
     #[test]
     fn no_finding_renders_with_an_unfilled_placeholder() {
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
-        for entry in std::fs::read_dir(dir).expect("fixtures") {
-            let path = entry.expect("entry").path();
-            if path.extension().is_none_or(|e| e != "mp4") {
-                continue;
-            }
-            let bytes = std::fs::read(&path).expect("fixture");
-            let Some(facts) = gate::probe(&bytes) else {
-                continue;
-            };
+        every_fixture(|facts, bytes, path| {
             for lang in Lang::ALL {
-                for (finding, fix) in findings(&facts, bytes.len() as u64, lang) {
+                for (finding, fix) in findings(facts, bytes, lang) {
                     for rendered in [&finding, &fix] {
                         assert!(
                             !rendered.contains('{') && !rendered.contains('}'),
@@ -841,6 +1256,6 @@ mod tests {
                     }
                 }
             }
-        }
+        });
     }
 }
