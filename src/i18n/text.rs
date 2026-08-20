@@ -1236,6 +1236,100 @@ pub static DIFF_AUDIO: Text = Text {
     ru: "Звуковая дорожка удалена",
 };
 
+// What the ENCODE did, in the past tense it actually happened in.
+//
+// These exist because the alternative was borrowing the `WILL_*` set, which
+// reads correctly in Chinese and wrongly in English -- "Audio removed · scale it
+// to 2956×1246". Rather than write them, the encode's work was dropped from the
+// list entirely, and the card then said "去掉了音轨" about a run that had also
+// cropped the picture, cut its opening and re-encoded the whole thing. Half the
+// work went unmentioned to avoid five strings.
+
+pub static DID_CROP: Text = Text {
+    en: "Cropped to {width}×{height}",
+    zh_hans: "裁成了 {width}×{height}",
+    zh_hant: "裁成了 {width}×{height}",
+    ja: "{width}×{height} に切り抜きました",
+    ko: "{width}×{height}로 잘랐습니다",
+    de: "Auf {width}×{height} zugeschnitten",
+    es: "Recortado a {width}×{height}",
+    fr: "Recadrée en {width}×{height}",
+    hr: "Izrezano na {width}×{height}",
+    hu: "{width}×{height} méretre vágva",
+    id: "Dipotong ke {width}×{height}",
+    nl: "Bijgesneden naar {width}×{height}",
+    pt: "Recortado para {width}×{height}",
+    ru: "Обрезано до {width}×{height}",
+};
+
+pub static DID_SCALE: Text = Text {
+    en: "Scaled to {width}×{height}",
+    zh_hans: "缩到了 {width}×{height}",
+    zh_hant: "縮到了 {width}×{height}",
+    ja: "{width}×{height} に縮小しました",
+    ko: "{width}×{height}로 축소했습니다",
+    de: "Auf {width}×{height} skaliert",
+    es: "Escalado a {width}×{height}",
+    fr: "Redimensionnée en {width}×{height}",
+    hr: "Smanjeno na {width}×{height}",
+    hu: "{width}×{height} méretre kicsinyítve",
+    id: "Diperkecil ke {width}×{height}",
+    nl: "Geschaald naar {width}×{height}",
+    pt: "Redimensionado para {width}×{height}",
+    ru: "Уменьшено до {width}×{height}",
+};
+
+pub static DID_FPS: Text = Text {
+    en: "Brought down to {limit} fps",
+    zh_hans: "降到了 {limit} fps",
+    zh_hant: "降到了 {limit} fps",
+    ja: "{limit} fps に下げました",
+    ko: "{limit} fps로 낮췄습니다",
+    de: "Auf {limit} fps reduziert",
+    es: "Reducido a {limit} fps",
+    fr: "Ramenée à {limit} fps",
+    hr: "Smanjeno na {limit} fps",
+    hu: "{limit} fps-re csökkentve",
+    id: "Diturunkan ke {limit} fps",
+    nl: "Teruggebracht naar {limit} fps",
+    pt: "Reduzido para {limit} fps",
+    ru: "Снижено до {limit} fps",
+};
+
+pub static DID_OPENING: Text = Text {
+    en: "Cut {shift} off the start",
+    zh_hans: "裁掉了开头 {shift}",
+    zh_hant: "裁掉了開頭 {shift}",
+    ja: "冒頭 {shift} をカットしました",
+    ko: "앞부분 {shift}을 잘랐습니다",
+    de: "{shift} vom Anfang abgeschnitten",
+    es: "Se cortaron {shift} del inicio",
+    fr: "{shift} coupés au début",
+    hr: "Odrezano {shift} s početka",
+    hu: "Levágva az elejéről {shift}",
+    id: "Memotong {shift} dari awal",
+    nl: "{shift} van het begin af",
+    pt: "Cortados {shift} do início",
+    ru: "Срезано {shift} с начала",
+};
+
+pub static DID_CODEC: Text = Text {
+    en: "Converted to AV1",
+    zh_hans: "转成了 AV1",
+    zh_hant: "轉成了 AV1",
+    ja: "AV1 に変換しました",
+    ko: "AV1으로 변환했습니다",
+    de: "Nach AV1 konvertiert",
+    es: "Convertido a AV1",
+    fr: "Convertie en AV1",
+    hr: "Pretvoreno u AV1",
+    hu: "AV1-re alakítva",
+    id: "Diubah ke AV1",
+    nl: "Omgezet naar AV1",
+    pt: "Convertido para AV1",
+    ru: "Преобразовано в AV1",
+};
+
 pub static DIFF_TAIL: Text = Text {
     en: "Tail cut: {was} → {now}",
     zh_hans: "裁掉了尾巴：{was} → {now}",
@@ -1650,6 +1744,11 @@ pub static EVERY_STRING: &[(&str, &Text)] = &[
     ("BENCH_REMAINING", &BENCH_REMAINING),
     ("DIFF_AUDIO", &DIFF_AUDIO),
     ("DIFF_TAIL", &DIFF_TAIL),
+    ("DID_CROP", &DID_CROP),
+    ("DID_SCALE", &DID_SCALE),
+    ("DID_FPS", &DID_FPS),
+    ("DID_OPENING", &DID_OPENING),
+    ("DID_CODEC", &DID_CODEC),
     ("DIFF_NOTHING", &DIFF_NOTHING),
     ("FIX_SIZE", &FIX_SIZE),
     ("SAID_MATERIAL_WINS", &SAID_MATERIAL_WINS),

@@ -1502,23 +1502,26 @@ fn written_line(lang: Lang, bytes: Option<u64>) -> Vec<String> {
         .collect()
 }
 
-/// EVERYTHING that happened to this file, both phases.
-/// What happened that the numbers do not already show.
+/// EVERYTHING that happened to this file, in the past tense it happened in.
 ///
-/// `None` when there is nothing to add. After an encode the TALLY is the answer
-/// to "what did my press do" -- 140.1 MB → 15.1 MB says it louder than any
-/// sentence can -- and the specification line below shows the shape it ended up
-/// in. So this covers only what neither of those can: a track removed, a tail
-/// cut.
+/// `None` only when literally nothing has been done and nothing was encoded --
+/// the file arrived correct, which is itself worth saying.
 ///
-/// Two bugs died here. It reported the lossless pass ALONE, which put "nothing
-/// needed doing -- this is your own file" directly above "compressed" and
-/// "140.1 MB -> 15.1 MB". The obvious repair -- also list the encode's work --
-/// was worse in English than in Chinese, because it borrowed the strings written
-/// for what WILL happen: "Audio removed - scale it to 2956x1246". The answer was
-/// that the encode does not need narrating at all.
+/// This has been wrong twice, in opposite directions. It reported the lossless
+/// pass ALONE, which put "nothing needed doing -- this is your own file"
+/// directly above "compressed" and "140.1 MB -> 15.1 MB". The repair for that
+/// borrowed the strings written for what WILL happen, which reads correctly in
+/// Chinese and wrongly in English -- "Audio removed - scale it to 2956x1246" --
+/// so the encode's work was dropped from the list instead, on the reasoning that
+/// the tally and the specification line already covered it.
+///
+/// They do not. The tally covers the SIZE. The specification says the shape the
+/// file ended up in, not that it was cropped rather than scaled to get there,
+/// and it says nothing at all about an opening that was cut. So a run that
+/// cropped the picture, cut its opening and re-encoded the whole thing reported
+/// "去掉了音轨" and stopped. Five strings were the price of not saying that.
 fn did_line(bench: &Bench, lang: Lang) -> Option<String> {
-    let did: Vec<String> = bench
+    let mut did: Vec<String> = bench
         .material
         .applied
         .iter()
@@ -1531,18 +1534,67 @@ fn did_line(bench: &Bench, lang: Lang) -> Option<String> {
         })
         .collect();
 
+    if let Some(done) = &bench.encoded {
+        let before = (bench.material.facts.width, bench.material.facts.height);
+        let after = (done.facts.width, done.facts.height);
+
+        // Cropping and scaling both change the frame size and are not the same
+        // act: one throws picture away, the other keeps all of it at fewer
+        // pixels. Which happened is knowable only from the choice that was made,
+        // because the result looks identical from the outside.
+        let cropped = bench.crop.and_then(|choice| choice.window(before));
+        if let Some(window) = cropped {
+            did.push(
+                text::DID_CROP
+                    .get(lang)
+                    .replace("{width}", &window.width.to_string())
+                    .replace("{height}", &window.height.to_string()),
+            );
+        }
+        let mid = cropped.map_or(before, |w| (w.width, w.height));
+        if after != mid {
+            did.push(
+                text::DID_SCALE
+                    .get(lang)
+                    .replace("{width}", &after.0.to_string())
+                    .replace("{height}", &after.1.to_string()),
+            );
+        }
+
+        let was_fps = crate::gate::probe::reported_fps(bench.material.facts.fps);
+        let now_fps = crate::gate::probe::reported_fps(done.facts.fps);
+        if now_fps != was_fps {
+            did.push(
+                text::DID_FPS
+                    .get(lang)
+                    .replace("{limit}", &now_fps.to_string()),
+            );
+        }
+
+        if bench.opening_cut > 0.0 {
+            did.push(
+                text::DID_OPENING
+                    .get(lang)
+                    .replace("{shift}", &clock(bench.opening_cut)),
+            );
+        }
+
+        // Not said when the source was AV1 already: "converted to AV1" about a
+        // file that arrived as one is a sentence that describes nothing.
+        if bench.material.facts.codec != Some("av1") {
+            did.push(text::DID_CODEC.get(lang).to_owned());
+        }
+    }
+
     if !did.is_empty() {
         return Some(did.join(SEP));
     }
-    // Nothing done AND nothing encoded: the file arrived correct, which is worth
-    // saying. Nothing done but something WAS encoded: the tally has already said
-    // everything, and "nothing needed doing" over a 90% saving is the sentence
-    // that started all this.
     bench
         .encoded
         .is_none()
         .then(|| text::DIFF_NOTHING.get(lang).to_owned())
 }
+
 /// What is wrong, in as few words as carry it.
 fn wrong_line(pending: &[Pending], lang: Lang) -> String {
     pending
@@ -2483,6 +2535,37 @@ mod tests {
                         None,
                     )
                 },
+                // EVERY kind of change at once. Seven items in "what was done",
+                // which is the longest that line can be, and it wraps -- so it
+                // is the case that decides whether the card still fits.
+                Bench {
+                    crop: Some(crop::Choice::centred(crop::Shape::Wide)),
+                    opening_cut: 1.2,
+                    source_facts: facts_of("vp09", 5120, 2160, 120.0),
+                    material: Box::new(Material::for_test(
+                        PathBuf::from(LONG),
+                        390_000_000,
+                        facts_of("vp09", 5120, 2160, 120.0),
+                        vec![
+                            Applied::AudioDropped,
+                            Applied::TailCut {
+                                was: 110.6,
+                                now: 92.0,
+                            },
+                        ],
+                    )),
+                    ..a_bench(
+                        vec![],
+                        Some(Box::new(Encoded {
+                            path: PathBuf::from(LONG),
+                            bytes: 74_000_000,
+                            facts: facts_of("av1", 2560, 1440, 60.0),
+                            crf: 34,
+                            encodes: 2,
+                        })),
+                        None,
+                    )
+                },
                 // EVERY problem at once, which is the tallest the card can be:
                 // a codec nothing plays, over the pixel budget, over the frame
                 // rate, an opening cut pending, and over the limit -- five
@@ -2692,6 +2775,33 @@ mod tests {
                 "two problems, nothing done yet",
                 shape(big(), 146_900_000, vec![], 146_900_000, None),
             ),
+            // EVERY kind of change at once, which is the longest the "what was
+            // done" line can be and the case that proves nothing is silently
+            // left out of it.
+            ("everything at once, and done", {
+                let mut bench = shape(
+                    facts_of("vp09", 5120, 2160, 120.0),
+                    396_000_000,
+                    vec![
+                        Applied::AudioDropped,
+                        Applied::TailCut {
+                            was: 110.6,
+                            now: 92.0,
+                        },
+                    ],
+                    390_000_000,
+                    Some(Box::new(Encoded {
+                        path: PathBuf::from(LONG),
+                        bytes: 74_000_000,
+                        facts: facts_of("av1", 2560, 1440, 60.0),
+                        crf: 34,
+                        encodes: 2,
+                    })),
+                );
+                bench.crop = Some(crop::Choice::centred(crop::Shape::Wide));
+                bench.opening_cut = 1.2;
+                bench
+            }),
             ("a crop asked for and not yet applied", {
                 let mut bench = shape(
                     facts_of("h264", 1080, 816, 24.0),
