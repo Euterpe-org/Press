@@ -665,22 +665,63 @@ pub static BENCH_REMAINING: Text = Text {
     ru: "Нужен ещё один проход",
 };
 
-/// Heads the list of what the lossless pass already did.
-pub static DIFF_HEADING: Text = Text {
-    en: "Done so far",
-    zh_hans: "已经做了",
-    zh_hant: "已經做了",
-    ja: "ここまでの処理",
-    ko: "지금까지 한 것",
-    de: "Bisher erledigt",
-    es: "Hecho hasta ahora",
-    fr: "Fait jusqu'ici",
-    hr: "Dosad učinjeno",
-    hu: "Eddig elvégezve",
-    id: "Yang sudah dilakukan",
-    nl: "Tot nu toe gedaan",
-    pt: "Feito até agora",
-    ru: "Сделано на данный момент",
+/// The headline after an encode has just produced something.
+///
+/// Separate from [`BENCH_READY`] on purpose. The state after a successful encode
+/// reads the same as the state before it -- "ready to upload" was true both
+/// times -- so returning to a screen whose headline had not changed was
+/// indistinguishable from nothing having happened.
+pub static BENCH_COMPRESSED: Text = Text {
+    en: "Compressed",
+    zh_hans: "压好了",
+    zh_hant: "壓好了",
+    ja: "圧縮できました",
+    ko: "압축했습니다",
+    de: "Komprimiert",
+    es: "Comprimido",
+    fr: "Compressée",
+    hr: "Sažeto",
+    hu: "Tömörítve",
+    id: "Terkompresi",
+    nl: "Gecomprimeerd",
+    pt: "Comprimido",
+    ru: "Сжато",
+};
+
+/// A number that was not on the previous screen, which is the other half of
+/// making this one read as a different screen.
+pub static BENCH_SMALLER: Text = Text {
+    en: "{percent}% smaller",
+    zh_hans: "小了 {percent}%",
+    zh_hant: "小了 {percent}%",
+    ja: "{percent}% 小さく",
+    ko: "{percent}% 작아짐",
+    de: "{percent}% kleiner",
+    es: "{percent}% más pequeño",
+    fr: "{percent}% plus petit",
+    hr: "{percent}% manje",
+    hu: "{percent}%-kal kisebb",
+    id: "{percent}% lebih kecil",
+    nl: "{percent}% kleiner",
+    pt: "{percent}% menor",
+    ru: "меньше на {percent}%",
+};
+
+pub static BENCH_ALLOWANCE: Text = Text {
+    en: "{percent}% of the {limit} allowed",
+    zh_hans: "占上限 {limit} 的 {percent}%",
+    zh_hant: "佔上限 {limit} 的 {percent}%",
+    ja: "上限 {limit} の {percent}%",
+    ko: "제한 {limit}의 {percent}%",
+    de: "{percent}% der erlaubten {limit}",
+    es: "{percent}% de los {limit} permitidos",
+    fr: "{percent}% des {limit} autorisés",
+    hr: "{percent}% od dopuštenih {limit}",
+    hu: "a megengedett {limit} {percent}%-a",
+    id: "{percent}% dari {limit} yang diizinkan",
+    nl: "{percent}% van de toegestane {limit}",
+    pt: "{percent}% dos {limit} permitidos",
+    ru: "{percent}% от разрешённых {limit}",
 };
 
 pub static DIFF_AUDIO: Text = Text {
@@ -734,24 +775,6 @@ pub static DIFF_NOTHING: Text = Text {
     ru: "Ничего не потребовалось — это ваш исходный файл",
 };
 
-/// Heads the list of what a transcode still has to fix.
-pub static PENDING_HEADING: Text = Text {
-    en: "Still to fix",
-    zh_hans: "还要处理",
-    zh_hant: "還要處理",
-    ja: "これから直すもの",
-    ko: "아직 고칠 것",
-    de: "Noch zu beheben",
-    es: "Aún por corregir",
-    fr: "Reste à corriger",
-    hr: "Još za popraviti",
-    hu: "Még javítandó",
-    id: "Masih perlu diperbaiki",
-    nl: "Nog te herstellen",
-    pt: "Ainda a corrigir",
-    ru: "Ещё нужно исправить",
-};
-
 pub static FIX_SIZE: Text = Text {
     en: "compressed to fit under {limit} MB",
     zh_hans: "会压到 {limit} MB 以内",
@@ -786,25 +809,6 @@ pub static RESULT_RECIPE: Text = Text {
     nl: "AV1 · kwaliteit CRF {crf} · {encodes} encodes",
     pt: "AV1 · qualidade CRF {crf} · {encodes} codificações",
     ru: "AV1 · качество CRF {crf} · кодирований: {encodes}",
-};
-
-/// Size against the allowance. The percentage is the useful half: it says
-/// whether there was room left, which is the question the quality floor answers.
-pub static BENCH_SIZE: Text = Text {
-    en: "{before} → {after} · {percent}% of the {limit} allowed",
-    zh_hans: "{before} → {after} · 占上限 {limit} 的 {percent}%",
-    zh_hant: "{before} → {after} · 佔上限 {limit} 的 {percent}%",
-    ja: "{before} → {after} · 上限 {limit} の {percent}%",
-    ko: "{before} → {after} · 제한 {limit}의 {percent}%",
-    de: "{before} → {after} · {percent}% der erlaubten {limit}",
-    es: "{before} → {after} · {percent}% de los {limit} permitidos",
-    fr: "{before} → {after} · {percent}% des {limit} autorisés",
-    hr: "{before} → {after} · {percent}% od dopuštenih {limit}",
-    hu: "{before} → {after} · a megengedett {limit} {percent}%-a",
-    id: "{before} → {after} · {percent}% dari {limit} yang diizinkan",
-    nl: "{before} → {after} · {percent}% van de toegestane {limit}",
-    pt: "{before} → {after} · {percent}% dos {limit} permitidos",
-    ru: "{before} → {after} · {percent}% от разрешённых {limit}",
 };
 
 pub static SAID_MATERIAL_WINS: Text = Text {
@@ -903,22 +907,28 @@ pub static BACK_TO_TRIM: Text = Text {
     ru: "Вернуться к обрезке",
 };
 
-/// The file is already uploadable; this only makes it lighter.
+/// The file is already uploadable; this makes it lighter for every player who
+/// downloads it, which is why it is the LOUD button rather than the hedged one.
+///
+/// It read "try to make it smaller" and sat in a grey pill beside a big blue
+/// Save. Both halves of that were wrong: the hedge undersells something Press is
+/// confident about, and the weight pointed at the exit instead of at the
+/// recommended step.
 pub static SHRINK_FURTHER: Text = Text {
-    en: "Try to make it smaller",
-    zh_hans: "试试压得更小",
-    zh_hant: "試試壓得更小",
-    ja: "さらに小さくしてみる",
-    ko: "더 작게 만들어 보기",
-    de: "Kleiner machen versuchen",
-    es: "Intentar hacerlo más pequeño",
-    fr: "Essayer de le réduire",
-    hr: "Pokušaj smanjiti",
-    hu: "Próbáljuk kisebbre",
-    id: "Coba perkecil lagi",
-    nl: "Kleiner proberen te maken",
-    pt: "Tentar deixar menor",
-    ru: "Попробовать уменьшить",
+    en: "Make it smaller",
+    zh_hans: "压得更小",
+    zh_hant: "壓得更小",
+    ja: "さらに小さく",
+    ko: "더 작게",
+    de: "Kleiner machen",
+    es: "Hacerlo más pequeño",
+    fr: "Le réduire",
+    hr: "Smanji ga",
+    hu: "Legyen kisebb",
+    id: "Perkecil lagi",
+    nl: "Kleiner maken",
+    pt: "Deixar menor",
+    ru: "Уменьшить",
 };
 
 pub static SAVE: Text = Text {
@@ -1114,15 +1124,15 @@ pub static EVERY_STRING: &[(&str, &Text)] = &[
     ("PHASE_A_CLEAR", &PHASE_A_CLEAR),
     ("PHASE_A_CLEAR_HINT", &PHASE_A_CLEAR_HINT),
     ("BENCH_READY", &BENCH_READY),
+    ("BENCH_COMPRESSED", &BENCH_COMPRESSED),
+    ("BENCH_SMALLER", &BENCH_SMALLER),
+    ("BENCH_ALLOWANCE", &BENCH_ALLOWANCE),
     ("BENCH_REMAINING", &BENCH_REMAINING),
-    ("DIFF_HEADING", &DIFF_HEADING),
     ("DIFF_AUDIO", &DIFF_AUDIO),
     ("DIFF_TAIL", &DIFF_TAIL),
     ("DIFF_NOTHING", &DIFF_NOTHING),
-    ("PENDING_HEADING", &PENDING_HEADING),
     ("FIX_SIZE", &FIX_SIZE),
     ("RESULT_RECIPE", &RESULT_RECIPE),
-    ("BENCH_SIZE", &BENCH_SIZE),
     ("SAID_MATERIAL_WINS", &SAID_MATERIAL_WINS),
     ("STEP_RECALIBRATING", &STEP_RECALIBRATING),
     ("STOP", &STOP),

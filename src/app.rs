@@ -324,13 +324,13 @@ impl eframe::App for Press {
         );
 
         hairline(ui, inner.x_range(), rule_y);
-        region(ui, header, |ui| self.header(ui));
-        region(ui, body, |ui| self.body(ui, &ctx));
+        region(ui, "the header", header, |ui| self.header(ui));
+        region(ui, "the body", body, |ui| self.body(ui, &ctx));
 
         if action_h > 0.0 {
             let bar = slice_bottom(inner, action_h);
             hairline(ui, inner.x_range(), bar.top() - space::ROW);
-            region(ui, bar, |ui| self.action(ui));
+            region(ui, "the action bar", bar, |ui| self.action(ui));
         }
     }
 }
@@ -356,15 +356,19 @@ fn hairline(ui: &egui::Ui, x: egui::Rangef, y: f32) {
 /// it. So a debug build also asserts that what was laid out actually fitted --
 /// every test run is a check that the fixed canvas is big enough for what is on
 /// it, in every language.
-fn region(ui: &mut egui::Ui, rect: egui::Rect, add: impl FnOnce(&mut egui::Ui)) {
+fn region(ui: &mut egui::Ui, name: &str, rect: egui::Rect, add: impl FnOnce(&mut egui::Ui)) {
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
     child.set_clip_rect(rect);
     add(&mut child);
 
+    // Named, because "a region overflowed" is a fact nobody can act on. There
+    // are eight of them and they nest, so the first question on reading the
+    // failure is always which one -- and answering it by bisecting the test is
+    // several minutes that this string costs nothing to save.
     let used = child.min_rect();
     debug_assert!(
         used.height() <= rect.height() + 1.0 && used.width() <= rect.width() + 1.0,
-        "a region laid out {:.0}x{:.0} into {:.0}x{:.0} and the excess was clipped away",
+        "{name} laid out {:.0}x{:.0} into {:.0}x{:.0} and the excess was clipped away",
         used.width(),
         used.height(),
         rect.width(),
@@ -447,30 +451,40 @@ impl Press {
                     if stuck && theme::quiet(ui, text::BACK_TO_TRIM.get(lang)).clicked() {
                         pressed = Some(Act::BackToTrim);
                     }
-                    // Hidden when stuck: the search already went to the coarsest
-                    // quality there is, so pressing again would spend minutes
-                    // reaching the same answer. The way out is a shorter video.
-                    if runnable.is_some() && !stuck {
-                        // Loud only when it is the thing standing between the
-                        // charter and a file they can upload. Once the file is
-                        // already good, "make it smaller" is an option, not the
-                        // point.
+                    // THE LOUD BUTTON IS ALWAYS THE NEXT USEFUL THING, and it
+                    // MOVES as the run progresses -- which is itself a signal
+                    // that something happened.
+                    //
+                    // It used to be pinned to Save, so on a file that was
+                    // already fine the recommended action -- make it smaller,
+                    // which is smaller for every player who downloads it -- was
+                    // the grey pill beside a big blue button. "我找试试压得更小
+                    // 这个按钮找了半天."
+                    //
+                    // Hidden when stuck: the search already reached the coarsest
+                    // quality there is, so pressing again spends minutes on the
+                    // same answer. The way out is a shorter video.
+                    let offer_run = runnable.is_some() && !stuck;
+                    if offer_run {
                         let label = if ready {
                             text::SHRINK_FURTHER.get(lang)
                         } else {
                             text::START.get(lang)
                         };
-                        let hit = if ready {
-                            theme::quiet(ui, label).clicked()
-                        } else {
-                            theme::primary(ui, label).clicked()
-                        };
-                        if hit {
+                        if theme::primary(ui, label).clicked() {
                             pressed = Some(Act::Run);
                         }
                     }
-                    if ready && theme::primary(ui, text::SAVE.get(lang)).clicked() {
-                        pressed = Some(Act::Save);
+                    if ready {
+                        // Quiet only while there is something better to press.
+                        let hit = if offer_run {
+                            theme::quiet(ui, text::SAVE.get(lang)).clicked()
+                        } else {
+                            theme::primary(ui, text::SAVE.get(lang)).clicked()
+                        };
+                        if hit {
+                            pressed = Some(Act::Save);
+                        }
                     }
                     // Only once there is somewhere to go. Uploading is the next
                     // thing that happens, and it starts in a file manager.
@@ -1115,11 +1129,11 @@ impl Press {
         let readout =
             egui::Rect::from_min_max(egui::pos2(body.right() - READOUT_W, body.top()), body.max);
 
-        region(ui, workbench, |ui| {
+        region(ui, "the workbench", workbench, |ui| {
             workbench_column(ui, lang, loaded, texture.as_ref());
         });
-        region(ui, readout, |ui| {
-            verdict_card(ui, lang, loaded, readout.height(), no_encoder);
+        region(ui, "the readout", readout, |ui| {
+            verdict_card(ui, lang, loaded, no_encoder);
         });
     }
 
@@ -1238,116 +1252,190 @@ impl Press {
 
     /// The hub between the phases: what we have, and what is still wrong.
     ///
-    /// Two columns, like the inspect screen and for the same reason -- the left
-    /// is what happened, the right is what it means. A single centred card was
-    /// what the old finished screen used, and on a fixed canvas it left most of
-    /// the window empty while the important half was a footnote.
+    /// ONE card, centred, sized to its contents. The first version was two
+    /// full-height columns and it was a mess: both cards opened with a green
+    /// heading saying the same thing in different words, one of them showed the
+    /// path of a temp file nobody should ever see, and each was a border drawn
+    /// around four hundred pixels of nothing.
+    ///
+    /// So the screen has one focal point and a strict order under it -- the
+    /// verdict, the number, then everything else in one muted line. Whatever is
+    /// left over is left empty, because a card stretched around emptiness is
+    /// worse than emptiness.
     fn bench(&mut self, ui: &mut egui::Ui) {
         let lang = self.lang;
         let Stage::Bench(bench) = &self.stage else {
             return;
         };
         let pending = bench.pending();
-        let (path, bytes, facts) = bench.have();
+        let (_, bytes, facts) = bench.have();
 
-        let body = ui.max_rect();
-        let left = egui::Rect::from_min_max(
-            body.min,
-            egui::pos2(body.left() + WORKBENCH_W, body.bottom()),
-        );
-        let right =
-            egui::Rect::from_min_max(egui::pos2(body.right() - READOUT_W, body.top()), body.max);
+        centred(ui, "bench", |ui| {
+            theme::card(ui, |ui| {
+                ui.set_width(ui.available_width());
 
-        region(ui, left, |ui| {
-            theme::card_of_height(ui, left.height(), |ui| {
-                if pending.is_empty() {
-                    theme::heading(ui, text::BENCH_READY.get(lang), theme::GOOD);
-                } else {
-                    theme::heading(ui, text::BENCH_REMAINING.get(lang), theme::NOTICE);
-                }
-                ui.add_space(space::TIGHT);
-                theme::muted(ui, &shape(facts, bytes));
+                // Which file this is about -- the charter's own, never the
+                // intermediate. Elided rather than wrapped: three lines of
+                // monospace above the headline buries the headline.
+                theme::muted(ui, &elide_middle(&bench.source.to_string_lossy(), 64));
+                ui.add_space(space::ROW);
 
-                ui.add_space(space::TIGHT);
-                let allowance = bytes as f64 / limits::MAX_BYTES as f64 * 100.0;
-                ui.label(
-                    egui::RichText::new(
-                        text::BENCH_SIZE
-                            .get(lang)
-                            .replace("{before}", &megabytes(bench.source_bytes))
-                            .replace("{after}", &megabytes(bytes))
-                            .replace("{percent}", &format!("{allowance:.0}"))
-                            .replace("{limit}", &megabytes(limits::MAX_BYTES)),
-                    )
-                    .size(theme::size::SMALL)
-                    .color(theme::INK),
-                );
+                // THE ONE THING TO READ FIRST, and it reports the EVENT where
+                // there has just been one.
+                //
+                // It used to report the state, and the state after a successful
+                // encode reads the same as the state before it -- "ready to
+                // upload" was true both times. Coming back to a screen whose
+                // headline has not changed is indistinguishable from nothing
+                // having happened, and that is exactly how it was read: "我看了
+                // 半天才意识到哦原来是压完了".
+                let (hero, colour) =
+                    match (&bench.said, bench.encoded.is_some(), pending.is_empty()) {
+                        (Some(Said::Failed(_)), ..) => (text::FAILED.get(lang), theme::ALARM),
+                        (Some(Said::StillTooLarge { .. }), ..) => {
+                            (text::STILL_TOO_LARGE.get(lang), theme::NOTICE)
+                        }
+                        (_, true, true) => (text::BENCH_COMPRESSED.get(lang), theme::GOOD),
+                        (_, _, true) => (text::BENCH_READY.get(lang), theme::GOOD),
+                        (_, _, false) => (text::BENCH_REMAINING.get(lang), theme::NOTICE),
+                    };
+                theme::heading(ui, hero, colour);
 
-                // The parameters, plainly. There is no knob for them -- Press
-                // decides -- so the least it owes the charter is to say what it
-                // decided and why the file weighs what it weighs.
-                if let Some(done) = &bench.encoded {
-                    ui.add_space(space::TIGHT);
+                // THE NUMBER, at the size a number deserves -- but only once
+                // there is a before AND an after. Until something has been
+                // produced the two are the same file, and "28.4 MB → 28.4 MB"
+                // in eighteen point is a headline that says nothing while
+                // taking the space of the list that says everything.
+                ui.add_space(space::ROW);
+                if bytes == bench.source_bytes {
                     theme::muted(
                         ui,
-                        &text::RESULT_RECIPE
-                            .get(lang)
-                            .replace("{crf}", &done.crf.to_string())
-                            .replace("{encodes}", &done.encodes.max(1).to_string()),
+                        &format!("{}  ·  {}", megabytes(bytes), shape_only(facts)),
                     );
+                } else {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{} → {}",
+                            megabytes(bench.source_bytes),
+                            megabytes(bytes)
+                        ))
+                        .size(theme::size::TITLE)
+                        .color(theme::INK),
+                    );
+                    ui.add_space(2.0);
+
+                    // "87% smaller" is a number that was not on the previous
+                    // screen, which is half of why this one now reads as a
+                    // different screen rather than the same one again.
+                    let mut under = Vec::new();
+                    if bytes < bench.source_bytes && bench.source_bytes > 0 {
+                        let saved = 100.0 - bytes as f64 / bench.source_bytes as f64 * 100.0;
+                        under.push(
+                            text::BENCH_SMALLER
+                                .get(lang)
+                                .replace("{percent}", &format!("{saved:.0}")),
+                        );
+                    }
+                    under.push(
+                        text::BENCH_ALLOWANCE
+                            .get(lang)
+                            .replace(
+                                "{percent}",
+                                &format!("{:.0}", bytes as f64 / limits::MAX_BYTES as f64 * 100.0),
+                            )
+                            .replace("{limit}", &megabytes(limits::MAX_BYTES)),
+                    );
+                    theme::muted(ui, &under.join("  ·  "));
                 }
 
-                ui.add_space(space::BLOCK);
-                theme::muted(ui, text::DIFF_HEADING.get(lang));
-                ui.add_space(space::TIGHT);
-                let did = diff_lines(bench, lang);
-                if did.is_empty() {
-                    theme::muted(ui, text::DIFF_NOTHING.get(lang));
-                } else {
-                    for line in did {
-                        ui.add_space(2.0);
-                        ui.label(egui::RichText::new(line).color(theme::INK));
+                // The list and the verdict are ALTERNATIVES, not a stack.
+                //
+                // "Still to fix: 379 MB, over the 80 MB limit -- will be
+                // compressed to under 80 MB" under a headline that says it
+                // cannot be is both a repetition and a lie. Where a run has
+                // already answered, its answer is the message.
+                match &bench.said {
+                    Some(said @ (Said::StillTooLarge { .. } | Said::Failed(_))) => {
+                        ui.add_space(space::ROW);
+                        said_line(ui, lang, said);
+                    }
+                    other => {
+                        for (what, fix) in pending_lines(&pending, lang) {
+                            // A LIST, spaced as one. `ROW` between items that
+                            // are each two lines apart makes five findings read
+                            // as five separate announcements, and costs sixty
+                            // pixels that the fifth finding then does not have.
+                            ui.add_space(space::TIGHT);
+                            // The bullet is part of the sentence rather than a
+                            // column beside it. A `horizontal` row holding a
+                            // marker and a block of text puts the text in a
+                            // layout that resolves its wrap mode to EXTEND, and
+                            // the long ones then ran off the card.
+                            theme::line(ui, &format!("•  {what}"), theme::INK);
+                            ui.add_space(2.0);
+                            theme::muted(ui, &format!("    {fix}"));
+                        }
+                        if let Some(said) = other {
+                            ui.add_space(space::ROW);
+                            said_line(ui, lang, said);
+                        }
                     }
                 }
 
-                if bench.saved.is_some() || bench.said.is_some() {
-                    ui.add_space(space::BLOCK);
-                }
-                if let Some(said) = &bench.said {
-                    said_line(ui, lang, said);
-                }
+                // One muted line for the whole of what was done and how. It is
+                // worth stating -- Press chose these and nobody else can -- but
+                // it is never what anyone opened the window to find out.
+                ui.add_space(space::BLOCK);
+                theme::rule(ui);
+                ui.add_space(space::TIGHT);
+                theme::muted(ui, &done_line(bench, facts, lang));
+
                 if let Some(to) = &bench.saved {
-                    ui.add_space(space::TIGHT);
+                    ui.add_space(space::ROW);
                     theme::muted(ui, text::SAVED_TO.get(lang));
                     ui.add_space(2.0);
                     theme::path(ui, &to.to_string_lossy());
                 }
             });
         });
-
-        region(ui, right, |ui| {
-            theme::card_of_height(ui, right.height(), |ui| {
-                theme::path(ui, &path.to_string_lossy());
-                ui.add_space(space::BLOCK);
-                if pending.is_empty() {
-                    theme::heading(ui, text::PHASE_A_CLEAR.get(lang), theme::GOOD);
-                    return;
-                }
-                theme::muted(ui, text::PENDING_HEADING.get(lang));
-                for (what, fix) in pending_lines(&pending, lang) {
-                    ui.add_space(space::ROW);
-                    ui.horizontal_top(|ui| {
-                        ui.label(egui::RichText::new("•").color(theme::NOTICE));
-                        ui.vertical(|ui| {
-                            ui.label(egui::RichText::new(what).color(theme::INK));
-                            ui.add_space(2.0);
-                            theme::muted(ui, &fix);
-                        });
-                    });
-                }
-            });
-        });
     }
+}
+
+/// What was done and how, in one line: the changes first, the recipe after.
+fn done_line(bench: &Bench, facts: &Facts, lang: Lang) -> String {
+    // The shape is only worth stating when nothing above has already stated
+    // it. Where there are findings they name the resolution and the frame rate
+    // themselves, and repeating both underneath is a wrapped line spent saying
+    // what the reader just read.
+    let mut parts = diff_lines(bench, lang);
+    if parts.is_empty() {
+        parts.push(text::DIFF_NOTHING.get(lang).to_owned());
+    }
+    if let Some(done) = &bench.encoded {
+        parts.push(
+            text::RESULT_RECIPE
+                .get(lang)
+                .replace("{crf}", &done.crf.to_string())
+                .replace("{encodes}", &done.encodes.max(1).to_string()),
+        );
+    }
+    if bench.encoded.is_some() {
+        parts.push(shape_only(facts));
+    }
+    parts.join("  ·  ")
+}
+
+/// A path shortened from the MIDDLE, because the ends are what identify it --
+/// the drive it is on and the file it is.
+fn elide_middle(path: &str, most: usize) -> String {
+    let glyphs: Vec<char> = path.chars().collect();
+    if glyphs.len() <= most {
+        return path.to_owned();
+    }
+    let keep = most.saturating_sub(1) / 2;
+    let head: String = glyphs[..keep].iter().collect();
+    let tail: String = glyphs[glyphs.len() - keep..].iter().collect();
+    format!("{head}…{tail}")
 }
 
 /// What the lossless pass actually did, in the charter's language.
@@ -1455,6 +1543,14 @@ fn said_line(ui: &mut egui::Ui, lang: Lang, said: &Said) {
     }
 }
 
+/// How wide a centred block is allowed to be.
+///
+/// 520 in a 960 window was a narrow column with a lot of air either side, and
+/// the narrowness cost lines: a finding worded in German wrapped to three where
+/// it fits in two. 640 keeps prose near a comfortable measure and stops the
+/// window looking like it is using a third of itself.
+const CENTRED_W: f32 = 640.0;
+
 /// Centres a block in whatever is left, at whatever height it turns out to be.
 ///
 /// The height is not guessed: it is measured after drawing and remembered, so
@@ -1464,24 +1560,51 @@ fn said_line(ui: &mut egui::Ui, lang: Lang, said: &Said) {
 /// off by the difference and the repaint timer settles it before an eye could
 /// follow.
 fn centred(ui: &mut egui::Ui, id: &str, add: impl FnOnce(&mut egui::Ui)) {
-    let id = egui::Id::new(id);
-    let known: f32 = ui.data(|d| d.get_temp(id)).unwrap_or(140.0);
+    let key = egui::Id::new(id);
+    let known: Option<f32> = ui.data(|d| d.get_temp(key));
+    let room = ui.available_height();
 
-    let slack = ((ui.available_height() - known) / 2.0).max(0.0);
-    ui.add_space(slack);
+    // Bounded by a scroll area, and the design is expected never to need it.
+    //
+    // Two different jobs. The debug assertion below is the one that matters: a
+    // screen that has to scroll on a canvas built for it is a design that did
+    // not fit, and it should fail a test. But when it does happen in the field
+    // -- a language nobody measured, a filename nobody imagined -- content that
+    // can be scrolled to is recoverable and content that was clipped away is
+    // simply gone.
+    let out = egui::ScrollArea::vertical()
+        .id_salt(key)
+        .max_height(room)
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            // NO SLACK UNTIL THE HEIGHT IS KNOWN. The first frame draws
+            // top-aligned and measures; every frame after centres what was
+            // measured. Guessing instead -- 140 was the guess -- pads by half
+            // the difference between the guess and the truth, and a card that
+            // turned out to be 368 tall in a body of 456 got 158 above it and
+            // spilled off the bottom.
+            let slack = known.map_or(0.0, |h| ((room - h) / 2.0).max(0.0));
+            ui.add_space(slack);
 
-    let width = ui.available_width().min(520.0);
-    let mut measured = known;
-    ui.vertical_centered(|ui| {
-        let start = ui.cursor().top();
-        ui.allocate_ui(egui::vec2(width, ui.available_height()), add);
-        measured = ui.cursor().top() - start;
-    });
+            let width = ui.available_width().min(CENTRED_W);
+            let mut measured = 0.0;
+            ui.vertical_centered(|ui| {
+                let start = ui.cursor().top();
+                ui.allocate_ui(egui::vec2(width, (room - slack).max(1.0)), add);
+                measured = ui.cursor().top() - start;
+            });
+            measured
+        });
 
-    if (measured - known).abs() > 0.5 {
-        ui.data_mut(|d| d.insert_temp(id, measured));
+    let measured = out.inner;
+    if known.is_none_or(|h| (measured - h).abs() > 0.5) {
+        ui.data_mut(|d| d.insert_temp(key, measured));
         ui.ctx().request_repaint();
     }
+    debug_assert!(
+        measured <= room + 1.0,
+        "{id} needs {measured:.0}px in {room:.0}px, so it will scroll -- it was meant to fit"
+    );
 }
 
 /// A horizontal row of controls, centred on the width it actually takes.
@@ -1559,8 +1682,12 @@ fn workbench_column(
         egui::pos2(column.right(), controls.top() - space::ROW),
     );
 
-    region(ui, glass, |ui| viewport(ui, texture, glass.size()));
-    region(ui, controls, |ui| transport(ui, lang, loaded));
+    region(ui, "the viewport", glass, |ui| {
+        viewport(ui, texture, glass.size())
+    });
+    region(ui, "the transport", controls, |ui| {
+        transport(ui, lang, loaded)
+    });
 }
 
 /// A framed viewport with the picture letterboxed inside it.
@@ -1701,9 +1828,16 @@ fn transport(ui: &mut egui::Ui, lang: Lang, loaded: &mut Inspect) {
 }
 
 /// The findings, and what is about to be done about each of them.
-fn verdict_card(ui: &mut egui::Ui, lang: Lang, loaded: &Inspect, tall: f32, no_encoder: bool) {
+fn verdict_card(ui: &mut egui::Ui, lang: Lang, loaded: &Inspect, no_encoder: bool) {
     let opening = loaded.trim.cut_opening;
-    theme::card_of_height(ui, tall, |ui| {
+    // Sized to its contents, not stretched to the column.
+    //
+    // It used to fill the column, on the reasoning that "a card that stops
+    // halfway down leaves a rectangle of nothing beside a rectangle of
+    // something". That was wrong, and a screenshot settled it: a border drawn
+    // around four hundred pixels of nothing is worse than the nothing.
+    theme::card(ui, |ui| {
+        ui.set_width(ui.available_width());
         // The WHOLE path, wrapped. A charter with three exports of the same
         // scene in three folders cannot tell them apart by file name, and the
         // one thing a formatter must never be vague about is which file it is
@@ -1841,8 +1975,14 @@ fn findings(facts: &Facts, lang: Lang) -> Vec<(String, String)> {
 }
 
 fn shape(facts: &Facts, bytes: u64) -> String {
+    format!("{}  ·  {}", shape_only(facts), megabytes(bytes))
+}
+
+/// The same, without the weight -- for the places that state the weight
+/// separately and larger.
+fn shape_only(facts: &Facts) -> String {
     format!(
-        "{}  ·  {}×{}  ·  {:.0} fps  ·  {}  ·  {}",
+        "{}  ·  {}×{}  ·  {:.0} fps  ·  {}",
         facts.codec.unwrap_or(if facts.raw_fourcc.is_empty() {
             "?"
         } else {
@@ -1852,7 +1992,6 @@ fn shape(facts: &Facts, bytes: u64) -> String {
         facts.height,
         facts.fps,
         clock(facts.duration),
-        megabytes(bytes),
     )
 }
 
@@ -2119,6 +2258,27 @@ mod tests {
                         })),
                         None,
                     )
+                },
+                // EVERY problem at once, which is the tallest the card can be:
+                // a codec nothing plays, over the pixel budget, over the frame
+                // rate, an opening cut pending, and over the limit -- five
+                // findings, each two lines, in the language that words them
+                // longest.
+                Bench {
+                    source_facts: facts_of("vp09", 3840, 2160, 120.0),
+                    material: Box::new(Material::for_test(
+                        PathBuf::from(LONG),
+                        396_000_000,
+                        facts_of("vp09", 3840, 2160, 120.0),
+                        vec![
+                            Applied::AudioDropped,
+                            Applied::TailCut {
+                                was: 110.6,
+                                now: 92.0,
+                            },
+                        ],
+                    )),
+                    ..a_bench(vec![], None, None)
                 },
                 a_bench(
                     vec![Applied::AudioDropped],

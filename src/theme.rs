@@ -160,28 +160,6 @@ pub fn card(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) -> egui::Respons
     panel().show(ui, add).response
 }
 
-/// A card of an exact outer height, for filling a column on a fixed canvas.
-///
-/// The height is given rather than grown into, because a card that asks its
-/// parent to be taller is how a 960x640 window ended up laying out 1084px of
-/// content.
-pub fn card_of_height(
-    ui: &mut egui::Ui,
-    outer: f32,
-    add: impl FnOnce(&mut egui::Ui),
-) -> egui::Response {
-    let width = ui.available_width();
-    let rect = egui::Rect::from_min_size(ui.cursor().min, egui::vec2(width, outer));
-    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
-    child.set_clip_rect(rect);
-    let response = panel().show(&mut child, |ui| {
-        ui.set_min_height(outer - 2.0 * f32::from(CARD_PAD_Y));
-        add(ui);
-    });
-    ui.advance_cursor_after_rect(rect);
-    response.response
-}
-
 /// The height EVERY button in an action row shares.
 ///
 /// One height, because two buttons side by side at two heights read as a
@@ -324,8 +302,19 @@ pub fn heading(ui: &mut egui::Ui, text: &str, colour: Color32) {
     );
 }
 
+/// Explicitly wrapped, not left to the layout to decide.
+///
+/// egui resolves a label's wrap mode from the layout it lands in, and inside a
+/// horizontal row that resolution is EXTEND -- the text runs off the side and
+/// takes the enclosing card's measured width with it. Saying so here means a
+/// line of prose behaves the same wherever it is put.
 pub fn muted(ui: &mut egui::Ui, text: &str) {
-    ui.label(egui::RichText::new(text).size(size::SMALL).color(INK_MUTED));
+    ui.add(egui::Label::new(egui::RichText::new(text).size(size::SMALL).color(INK_MUTED)).wrap());
+}
+
+/// A line of body text, wrapped, for the same reason as [`muted`].
+pub fn line(ui: &mut egui::Ui, text: &str, colour: Color32) {
+    ui.add(egui::Label::new(egui::RichText::new(text).color(colour)).wrap());
 }
 
 /// A file path, in full.
