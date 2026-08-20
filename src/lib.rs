@@ -16,6 +16,7 @@ pub mod ffmpeg;
 pub mod fonts;
 pub mod gate;
 pub mod i18n;
+pub mod job;
 pub mod phase_a;
 pub mod phase_b;
 pub mod plan;

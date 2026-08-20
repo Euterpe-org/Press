@@ -67,9 +67,9 @@
 use std::cell::Cell;
 use std::path::PathBuf;
 
-use crate::crop;
 use crate::ffmpeg::{Cancel, Ffmpeg, Progress, Ran, Watching};
 use crate::gate::{Facts, Verdict, limits};
+use crate::job::Request;
 use crate::phase_a::Material;
 use crate::plan::{self, Encode};
 use crate::verify::{self, Expect};
@@ -292,17 +292,12 @@ pub enum Outcome {
 }
 
 /// What is still wrong with a file, in the order it will be fixed.
-pub fn pending(
-    facts: &Facts,
-    bytes: u64,
-    opening_cut: f64,
-    crop: Option<crop::Window>,
-) -> Vec<Pending> {
-    let target = plan::plan(facts, None, crop);
+pub fn pending(facts: &Facts, bytes: u64, asked: &Request) -> Vec<Pending> {
+    let target = plan::plan(facts, None, asked.crop);
     let mut out = Vec::new();
 
     // First in the chain, so first in the list.
-    if let Some(window) = crop {
+    if let Some(window) = asked.crop {
         out.push(Pending::Crop {
             to: (window.width, window.height),
         });
@@ -329,9 +324,9 @@ pub fn pending(
             },
         });
     }
-    if opening_cut > 0.0 {
+    if asked.opening_cut > 0.0 {
         out.push(Pending::OpeningCut {
-            seconds: opening_cut,
+            seconds: asked.opening_cut,
         });
     }
     if bytes > limits::MAX_BYTES {
@@ -349,7 +344,7 @@ pub fn pending(
 /// The one case worth refusing outright: a file that already conforms and is
 /// already AV1. Re-encoding AV1 to AV1 was measured at ~190% of the original for
 /// no visible gain, so there is nothing to win and a generation to lose.
-pub fn aim(facts: &Facts, bytes: u64, opening_cut: f64, crop: Option<crop::Window>) -> Option<Aim> {
+pub fn aim(facts: &Facts, bytes: u64, asked: &Request) -> Option<Aim> {
     // SIZE FIRST, and on its own. This is the one question that turns the
     // allowance into a budget, and asking it as "does the gate pass" folded a
     // 2.6 MB video with the wrong frame rate in with a 400 MB one -- then
@@ -365,7 +360,7 @@ pub fn aim(facts: &Facts, bytes: u64, opening_cut: f64, crop: Option<crop::Windo
         return Some(Aim::Repair);
     }
     // Deliverable, and the charter asked for something anyway.
-    if opening_cut > 0.0 || crop.is_some() {
+    if !asked.is_empty() {
         return Some(Aim::Apply);
     }
     if facts.codec == Some("av1") {
@@ -425,13 +420,11 @@ enum Killed {
 }
 
 /// Run the size contest.
-#[allow(clippy::too_many_arguments)]
 pub fn run(
     ffmpeg: &Ffmpeg,
     material: &Material,
     aim: Aim,
-    opening_cut: f64,
-    crop: Option<crop::Window>,
+    asked: &Request,
     work: &Workspace,
     cancel: &Cancel,
     mut on_step: impl FnMut(Step),
@@ -439,8 +432,8 @@ pub fn run(
     let facts = &material.facts;
     // Recomputed from the MATERIAL, and with no allowance: Phase A already cut
     // the tail, so anything left to do is picture work.
-    let target = plan::plan(facts, None, crop);
-    let seconds = (facts.duration - opening_cut).max(0.0);
+    let target = plan::plan(facts, None, asked.crop);
+    let seconds = (facts.duration - asked.opening_cut).max(0.0);
     let expect = Expect {
         // Crop THEN scale, which is the order the filters run in. Reading
         // `size` alone expects the source's dimensions from a picture that has
@@ -512,13 +505,13 @@ pub fn run(
         // `winner.path`: the run handed back an `Encoded` naming a file it had
         // unlinked one statement earlier, under a green "compressed" headline.
         let output = work.file(&format!("try{attempts}-crf{crf}.mp4"));
-        let cmd = if opening_cut > 0.0 {
+        let cmd = if asked.opening_cut > 0.0 {
             plan::command_with_opening_cut(
                 &input,
                 &output.to_string_lossy(),
                 &target,
                 crf,
-                opening_cut,
+                asked.opening_cut,
                 None,
             )
         } else {

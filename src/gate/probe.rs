@@ -315,16 +315,18 @@ impl<'a> Walker<'a> {
     }
 
     fn tkhd(&mut self, body: usize, stop: usize) {
-        if body + 4 > stop || self.cur.is_none() {
+        // Bound to the slot up front rather than tested here and unwrapped four
+        // lines down, which is a check the compiler has to be told about twice
+        // and a panic if the two ever drift apart.
+        let (Some(slot), true) = (self.cur, body + 4 <= stop) else {
             return;
-        }
+        };
         let ver = self.d.get(body).copied().unwrap_or(0);
         let o = body + 4 + if ver == 1 { 16 } else { 8 };
         if o + 4 > stop {
             return;
         }
         let id = self.u32(o);
-        let slot = self.cur.expect("checked above");
         self.slots[slot].id = Some(id);
         self.slots[slot].quarter_turned = self.quarter_turn(o, ver, stop);
         // Python's `self.tracks[tid] = self.cur`: an existing id is REPLACED and

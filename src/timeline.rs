@@ -104,14 +104,15 @@ pub fn timeline(
         let near_end = (pointer.x - at(end)).abs() <= GRAB;
         // When both are within reach the END wins: it is the reversible one,
         // and it is what all but a few charters want.
-        grabbed = Some(if near_end {
+        let took = if near_end {
             Grabbed::End
         } else if near_start {
             Grabbed::Start
         } else {
             Grabbed::Playhead
-        });
-        ui.data_mut(|d| d.insert_temp(id, grabbed.unwrap()));
+        };
+        grabbed = Some(took);
+        ui.data_mut(|d| d.insert_temp(id, took));
     }
 
     if let (Some(handle), Some(pointer)) = (grabbed, response.interact_pointer_pos()) {

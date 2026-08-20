@@ -19,6 +19,7 @@
 use std::path::{Path, PathBuf};
 
 use euterpe_press::ffmpeg::Cancel;
+use euterpe_press::job::{Job, Request};
 use euterpe_press::plan::Trim;
 use euterpe_press::workspace::Workspace;
 use euterpe_press::{crop, gate, phase_a, phase_b};
@@ -82,10 +83,13 @@ fn a_turned_source_survives_a_crop_and_an_encode() {
 
     let settled = phase_a::run(
         &ffmpeg,
-        &source,
-        &facts,
-        bytes,
-        Trim::default(),
+        &Job {
+            source: source.to_path_buf(),
+            bytes,
+            facts: facts.clone(),
+            trim: Trim::default(),
+            crop: None,
+        },
         &work,
         &cancel,
         |_| {},
@@ -110,18 +114,13 @@ fn a_turned_source_survives_a_crop_and_an_encode() {
         "the window must fit the picture: {window:?} in {picture:?}"
     );
 
-    let aim = phase_b::aim(&material.facts, material.bytes, 0.0, Some(window))
-        .expect("a crop needs an encode");
-    let outcome = phase_b::run(
-        &ffmpeg,
-        &material,
-        aim,
-        0.0,
-        Some(window),
-        &work,
-        &cancel,
-        |_| {},
-    );
+    let asked = Request {
+        opening_cut: 0.0,
+        crop: Some(window),
+    };
+    let aim =
+        phase_b::aim(&material.facts, material.bytes, &asked).expect("a crop needs an encode");
+    let outcome = phase_b::run(&ffmpeg, &material, aim, &asked, &work, &cancel, |_| {});
     let phase_b::Outcome::Encoded(done) = outcome else {
         panic!("a turned source must still encode: {outcome:?}");
     };

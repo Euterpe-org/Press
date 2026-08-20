@@ -25,6 +25,7 @@
 use std::path::PathBuf;
 
 use euterpe_press::ffmpeg::{Cancel, Ffmpeg, Ran, Watching};
+use euterpe_press::job::{Job, Request};
 use euterpe_press::plan::Trim;
 use euterpe_press::workspace::Workspace;
 use euterpe_press::{gate, phase_a, phase_b};
@@ -125,10 +126,13 @@ fn cancelling_the_lossless_pass_writes_nothing() {
 
     let outcome = phase_a::run(
         &ffmpeg,
-        &source,
-        &facts,
-        bytes,
-        Trim::default(),
+        &Job {
+            source: source.to_path_buf(),
+            bytes,
+            facts: facts.clone(),
+            trim: Trim::default(),
+            crop: None,
+        },
         &work,
         &cancel,
         |_| {},
@@ -163,10 +167,13 @@ fn cancelling_the_encode_leaves_the_material_behind() {
 
     let settled = phase_a::run(
         &ffmpeg,
-        &source,
-        &facts,
-        bytes,
-        Trim::default(),
+        &Job {
+            source: source.to_path_buf(),
+            bytes,
+            facts: facts.clone(),
+            trim: Trim::default(),
+            crop: None,
+        },
         &work,
         &Cancel::new(),
         |_| {},
@@ -182,13 +189,21 @@ fn cancelling_the_encode_leaves_the_material_behind() {
 
     // VP9 cannot be shipped, and the file is nowhere near 80 MB: an encode is\r
     // owed with no budget to spend and nothing to fall back on.\r
-    let aim =
-        phase_b::aim(&material.facts, material.bytes, 0.0, None).expect("an encode is needed");
+    let aim = phase_b::aim(&material.facts, material.bytes, &Request::default())
+        .expect("an encode is needed");
     assert_eq!(aim, phase_b::Aim::Repair);
 
     let cancel = Cancel::new();
     cancel.request();
-    let outcome = phase_b::run(&ffmpeg, &material, aim, 0.0, None, &work, &cancel, |_| {});
+    let outcome = phase_b::run(
+        &ffmpeg,
+        &material,
+        aim,
+        &Request::default(),
+        &work,
+        &cancel,
+        |_| {},
+    );
     assert!(
         matches!(outcome, phase_b::Outcome::Cancelled),
         "expected a cancellation: {outcome:?}"
@@ -213,10 +228,13 @@ fn a_file_whose_only_problem_is_audio_is_deliverable_after_phase_a() {
 
     let settled = phase_a::run(
         &ffmpeg,
-        &source,
-        &facts,
-        bytes,
-        Trim::default(),
+        &Job {
+            source: source.to_path_buf(),
+            bytes,
+            facts: facts.clone(),
+            trim: Trim::default(),
+            crop: None,
+        },
         &work,
         &Cancel::new(),
         |_| {},
@@ -231,7 +249,7 @@ fn a_file_whose_only_problem_is_audio_is_deliverable_after_phase_a() {
         "the lossless pass alone should make this uploadable"
     );
     assert_eq!(
-        phase_b::aim(&material.facts, material.bytes, 0.0, None),
+        phase_b::aim(&material.facts, material.bytes, &Request::default()),
         Some(phase_b::Aim::Beat),
         "with a deliverable file in hand, an encode only earns its place on size"
     );

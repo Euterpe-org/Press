@@ -44,6 +44,7 @@ use eframe::egui;
 use crate::ffmpeg::{Cancel, Ffmpeg};
 use crate::gate::{self, Facts, limits};
 use crate::i18n::{Lang, Text, text};
+use crate::job::{Job, Request};
 use crate::phase_a::{self, Applied, Material};
 use crate::phase_b::{self, Aim, Encoded, Pending};
 use crate::plan::Trim;
@@ -97,8 +98,6 @@ pub struct Press {
     lang: Lang,
     ffmpeg: Option<Ffmpeg>,
     stage: Stage,
-    texture: Option<egui::TextureHandle>,
-    shown_pts: f64,
     /// A file chosen through the picker, waiting to be taken by the same code
     /// path a drop takes. One way in rather than two.
     pending: Option<PathBuf>,
@@ -128,36 +127,97 @@ enum Stage {
 
 /// A file is loaded and nothing has been done to it.
 struct Inspect {
-    path: PathBuf,
-    bytes: u64,
-    facts: Option<Facts>,
-    preview: Option<Preview>,
+    job: Job,
     /// Where the scrubber is, in seconds.
     at: f64,
-    /// The shape the charter asked for, if they asked. An OFFER, never applied
-    /// on Press's own initiative -- the gate has no opinion about shape.
-    crop: Option<crop::Choice>,
-    /// Which part of the source survives. Untouched by default: the opening is
-    /// never moved unless the charter moves it.
-    trim: Trim,
+    /// `None` when there is no encoder to decode with. The verdict does not need
+    /// one -- the gate reads the header -- so the screen still works without it.
+    view: Option<Viewfinder>,
+}
+
+/// The decoder, and the frame it last handed over.
+///
+/// One value because the second is meaningless without the first. They were two
+/// independent `Option`s on `Press`, which made "a texture with no decoder"
+/// representable, and made every stage transition responsible for remembering to
+/// clear both. Born and dropped with the screen that looks through it, so there
+/// is nothing left to remember.
+struct Viewfinder {
+    preview: Preview,
+    texture: Option<egui::TextureHandle>,
+    /// The stamp of the frame in `texture`, so an unchanged frame is not
+    /// re-uploaded on every repaint.
+    shown: f64,
+}
+
+impl Viewfinder {
+    fn open(ffmpeg: &Ffmpeg, source: &Path, facts: &Facts) -> Self {
+        // The frame ffmpeg will DECODE, not the one `stsd` describes. The
+        // viewfinder scales into a box of exactly this shape, so on a rotated
+        // clip the coded size squeezed an upright picture into a landscape box
+        // -- with the crop rectangle drawn on top of it, aimed at an axis that
+        // was not there.
+        let (w, h) = facts.picture();
+        let preview = Preview::open(ffmpeg.binary(), source, w, h, facts.fps);
+        // Something on screen immediately: an empty frame under a verdict reads
+        // as a decoder that failed.
+        preview.seek(0.0);
+        Self {
+            preview,
+            texture: None,
+            shown: f64::NAN,
+        }
+    }
+
+    /// Put the decoder's newest frame on the GPU, if it is newer than the last.
+    fn refresh(&mut self, ctx: &egui::Context) {
+        let Some(frame) = self.preview.frame() else {
+            return;
+        };
+        if frame.pts == self.shown && self.texture.is_some() {
+            return;
+        }
+        let image = egui::ColorImage::from_rgba_unmultiplied(
+            [frame.width as usize, frame.height as usize],
+            &frame.rgba,
+        );
+        match &mut self.texture {
+            Some(handle) => handle.set(image, egui::TextureOptions::LINEAR),
+            None => {
+                self.texture =
+                    Some(ctx.load_texture("preview", image, egui::TextureOptions::LINEAR))
+            }
+        }
+        self.shown = frame.pts;
+    }
 }
 
 struct Working {
-    /// The charter's own file, for the heading. Never the intermediate: a
-    /// progress screen naming a random temp file tells nobody anything.
-    source: PathBuf,
+    job: Job,
     phase: Phase,
     cancel: Cancel,
     inbox: Receiver<Note>,
     /// Held so the temp directory outlives the worker that is writing into it.
     work: Arc<Workspace>,
-    /// What the next screen will need, carried by the run itself.
-    held: Held,
 }
 
+/// Which phase is running, and what it already has in hand.
+///
+/// Phase A has nothing yet, by definition -- it is the thing that produces the
+/// material. Phase B cannot start without one. Carrying the material on the B
+/// arm is what makes that a fact about the type rather than an `Option` the
+/// screen has to unwrap and an "unreachable" error path to write for it.
 enum Phase {
     A(phase_a::Step),
-    B(phase_b::Step),
+    B {
+        /// Phase A's output. **Every** Phase B run encodes from this and never
+        /// from a previous Phase B result -- that would be a second generation
+        /// of loss for no gain.
+        material: Box<Material>,
+        /// The best result so far, kept across a run that does worse.
+        best: Option<Box<Encoded>>,
+        step: phase_b::Step,
+    },
 }
 
 /// Between the phases: what we have, and what is still wrong with it.
@@ -166,18 +226,7 @@ enum Phase {
 /// which is what makes "try to make it smaller" an ordinary press of the same
 /// button rather than a mode of its own.
 struct Bench {
-    source: PathBuf,
-    source_bytes: u64,
-    source_facts: Facts,
-    /// The charter's trim, WHOLE. The opening is carried here because Phase B
-    /// applies it -- it needs `-ss`, and `-ss` re-encodes -- and the tail is
-    /// carried because the way out of "it will not fit, make it shorter" is the
-    /// scrubber, and arriving there with the end handle reset throws away the
-    /// trim the charter is being told to tighten.
-    trim: Trim,
-    /// Carried the same way, and for the same reason: a crop rewrites the
-    /// picture, so it happens inside the one encode that does everything else.
-    crop: Option<crop::Choice>,
+    job: Job,
     /// Phase A's output. **Every** Phase B run encodes from this and never from
     /// a previous Phase B result -- that would be a second generation of loss
     /// for no gain.
@@ -251,28 +300,23 @@ impl Bench {
         }
     }
 
-    /// The crop window this choice makes on the material, once resolved.
+    /// What the charter asked for that has not been carried out yet.
     ///
-    /// `None` after an encode: it has already been applied, and a request that
-    /// has been carried out is not still pending.
-    fn crop_window(&self) -> Option<crop::Window> {
+    /// ONE question, asked once. A single ffmpeg invocation applies the whole
+    /// request at once, so "has the crop happened" and "has the opening moved"
+    /// cannot have different answers -- and asking them separately, as two
+    /// members that each re-derived it, only made two places to get it wrong.
+    fn outstanding(&self) -> Request {
         if self.encoded.is_some() {
-            return None;
+            return Request::default();
         }
-        let facts = &self.material.facts;
-        self.crop.and_then(|choice| choice.window(facts.picture()))
+        self.job.request(self.material.facts.picture())
     }
 
     /// Everything the next encode would do. Not all of it is a fault.
     fn pending(&self) -> Vec<Pending> {
         let (_, bytes, facts) = self.have();
-        // A request counts as outstanding until an encode has carried it out.
-        let cut = if self.encoded.is_some() {
-            0.0
-        } else {
-            self.trim.cut_opening
-        };
-        phase_b::pending(facts, bytes, cut, self.crop_window())
+        phase_b::pending(facts, bytes, &self.outstanding())
     }
 
     /// Whether anything stands between this file and an upload.
@@ -305,14 +349,20 @@ impl Bench {
         phase_b::aim(
             &self.material.facts,
             self.material.bytes,
-            self.trim.cut_opening,
-            self.crop_window(),
+            &self.outstanding(),
         )
     }
 }
 
+/// What a worker thread sends back.
+///
+/// A STEP, not a whole `Phase`. The worker knows how far its own run has got and
+/// nothing else -- it does not hold the material, it has never heard of the
+/// screen, and letting it post a complete phase meant it had to name state that
+/// belongs to the window.
 enum Note {
-    Step(Phase),
+    StepA(phase_a::Step),
+    StepB(phase_b::Step),
     SettledA(Box<phase_a::Outcome>),
     FittedB(Box<phase_b::Outcome>),
 }
@@ -334,8 +384,6 @@ impl Press {
             lang,
             ffmpeg,
             stage: Stage::Empty,
-            texture: None,
-            shown_pts: f64::NAN,
             pending: None,
             loads: 0,
             trouble: None,
@@ -459,8 +507,8 @@ impl Press {
     fn action_height(&self) -> f32 {
         match &self.stage {
             Stage::Empty => 0.0,
-            Stage::Inspect(inspect) => {
-                if self.ffmpeg.is_some() && inspect.facts.is_some() {
+            Stage::Inspect(_) => {
+                if self.ffmpeg.is_some() {
                     ACTION_TALL
                 } else {
                     0.0
@@ -493,8 +541,8 @@ impl Press {
         let lang = self.lang;
         match &self.stage {
             Stage::Empty => {}
-            Stage::Inspect(inspect) => {
-                if self.ffmpeg.is_some() && inspect.facts.is_some() {
+            Stage::Inspect(_) => {
+                if self.ffmpeg.is_some() {
                     ui.vertical_centered(|ui| {
                         if theme::primary(ui, text::NEXT_STEP.get(lang)).clicked() {
                             self.start_phase_a();
@@ -607,13 +655,19 @@ impl Press {
                 });
 
                 match pressed {
-                    Some(Act::Abandon) => {
-                        // Dropping the stage drops the Arc, and the last Arc
-                        // takes the temp directory with it.
-                        self.stage = Stage::Empty;
-                        self.texture = None;
+                    // Dropping the stage drops the Arc, and the last Arc takes
+                    // the temp directory with it -- along with the decoder and
+                    // its texture, which now live on the screen that used them
+                    // rather than on the window that had to remember to clear
+                    // them at every exit.
+                    Some(Act::Abandon) => self.stage = Stage::Empty,
+                    Some(Act::BackToTrim) => {
+                        if let Stage::Bench(bench) =
+                            std::mem::replace(&mut self.stage, Stage::Empty)
+                        {
+                            self.reopen(bench.job);
+                        }
                     }
-                    Some(Act::BackToTrim) => self.back_to_inspect(),
                     Some(Act::Run) => {
                         if let Some(aim) = runnable {
                             self.start_phase_b(aim);
@@ -692,58 +746,56 @@ impl Press {
         // A new file is a new situation; whatever went wrong with the last one
         // is no longer news.
         self.trouble = None;
-        self.texture = None;
-        self.shown_pts = f64::NAN;
-
-        // SAID, not swallowed. A drop that resets to the empty screen with
-        // nothing written on it is indistinguishable from a drop that was never
-        // noticed, and the charter drags the same file in again and again. This
-        // is a real dead end -- a file another program has open for writing, a
-        // disconnected drive -- and it has a reason worth reading.
+        // TWO WAYS A FILE CAN FAIL AT THE DOOR, and they both end here rather
+        // than on a screen built around a file nothing is known about. The old
+        // shape kept an unreadable one in `Inspect` with `facts: None`, which
+        // bought a workbench with no picture in it, a scrubber of zero length,
+        // a verdict card reading "cannot read this", and no button -- a dead end
+        // dressed as a workspace. Every screen past this point now has real
+        // facts by construction, and the two `is_some()` guards, the `(0, 0)`
+        // geometry fallback and the unreadable branch on the card are all gone
+        // with the state that needed them.
         let bytes = match std::fs::read(path) {
             Ok(bytes) => bytes,
             Err(error) => {
-                self.give_up(&format!("could not read {}: {error}", path.display()));
+                // A real dead end -- a file another program holds open, a
+                // disconnected drive. Said, not swallowed: resetting to the drop
+                // screen with nothing written on it is indistinguishable from a
+                // drop that was never noticed.
+                self.give_up(&format!("{}: {error}", path.display()));
                 return;
             }
         };
         let source_bytes = bytes.len() as u64;
-        let (facts, _) = gate::judge(&bytes);
+        let facts = gate::judge(&bytes).0;
         drop(bytes);
-
-        let preview = match (&facts, &self.ffmpeg) {
-            (Some(f), Some(ffmpeg)) => {
-                // The frame ffmpeg will decode, not the one `stsd` describes.
-                // The viewfinder scales to a box of exactly this shape, so on a
-                // rotated clip it was squeezing an upright picture into a
-                // landscape box -- and the crop rectangle was drawn on top of
-                // that, aimed at the wrong axis.
-                let (w, h) = f.picture();
-                let preview = Preview::open(ffmpeg.binary(), path, w, h, f.fps);
-                // Something on screen immediately: an empty frame under a
-                // verdict reads as a decoder that failed.
-                preview.seek(0.0);
-                Some(preview)
-            }
-            _ => None,
+        let Some(facts) = facts else {
+            self.give_up(text::VERDICT_UNREADABLE.get(self.lang));
+            return;
         };
 
         self.stage = Stage::Inspect(Box::new(Inspect {
-            path: path.to_path_buf(),
-            bytes: source_bytes,
-            facts,
-            preview,
+            view: self
+                .ffmpeg
+                .as_ref()
+                .map(|ffmpeg| Viewfinder::open(ffmpeg, path, &facts)),
+            job: Job {
+                source: path.to_path_buf(),
+                bytes: source_bytes,
+                facts,
+                trim: Trim::default(),
+                crop: None,
+            },
             at: 0.0,
-            crop: None,
-            trim: Trim::default(),
         }));
     }
 
     /// Drain the worker and keep the window repainting while anything moves.
     fn pump(&mut self, ctx: &egui::Context) {
         if let Stage::Inspect(loaded) = &mut self.stage
-            && let Some(preview) = &loaded.preview
+            && let Some(view) = &loaded.view
         {
+            let preview = &view.preview;
             // Decoded frames arrive on a worker thread, and egui only redraws
             // when something asks it to. Without this the first frame appears
             // when the charter happens to move the mouse -- which looked like it
@@ -765,7 +817,7 @@ impl Press {
                 // Playback stops at the trim, because past the trim is material
                 // the charter has already decided nobody will see. A preview
                 // that runs on into it is previewing a different video.
-                if let Some(end) = loaded.trim.keep_until
+                if let Some(end) = loaded.job.trim.keep_until
                     && frame.pts >= end
                 {
                     preview.pause();
@@ -781,7 +833,16 @@ impl Press {
 
         loop {
             match working.inbox.try_recv() {
-                Ok(Note::Step(phase)) => working.phase = phase,
+                Ok(Note::StepA(step)) => {
+                    if let Phase::A(at) = &mut working.phase {
+                        *at = step;
+                    }
+                }
+                Ok(Note::StepB(step)) => {
+                    if let Phase::B { step: at, .. } = &mut working.phase {
+                        *at = step;
+                    }
+                }
                 Ok(Note::SettledA(outcome)) => {
                     self.finish_phase_a(*outcome);
                     return;
@@ -805,21 +866,10 @@ impl Press {
     /// Phase A: the deterministic pass. Nothing is asked of the charter here --
     /// every answer follows from the file.
     fn start_phase_a(&mut self) {
-        let Stage::Inspect(inspect) = &self.stage else {
+        let (Stage::Inspect(inspect), Some(ffmpeg)) = (&self.stage, self.ffmpeg.clone()) else {
             return;
         };
-        let (Some(ffmpeg), Some(facts)) = (self.ffmpeg.clone(), inspect.facts.clone()) else {
-            return;
-        };
-        let source = inspect.path.clone();
-        let held = Held {
-            source_bytes: inspect.bytes,
-            source_facts: facts.clone(),
-            trim: inspect.trim,
-            crop: inspect.crop,
-            material: None,
-            encoded: None,
-        };
+        let job = inspect.job.clone();
 
         let work = match Workspace::open() {
             Ok(work) => Arc::new(work),
@@ -833,69 +883,59 @@ impl Press {
         let (tx, inbox) = channel();
         std::thread::spawn({
             let cancel = cancel.clone();
-            let source = source.clone();
             let work = Arc::clone(&work);
-            let bytes = held.source_bytes;
-            let trim = held.trim;
+            let job = job.clone();
             move || {
                 let tx2 = tx.clone();
-                let outcome = phase_a::run(
-                    &ffmpeg,
-                    &source,
-                    &facts,
-                    bytes,
-                    trim,
-                    &work,
-                    &cancel,
-                    |step| {
-                        let _ = tx2.send(Note::Step(Phase::A(step)));
-                    },
-                );
+                let outcome = phase_a::run(&ffmpeg, &job, &work, &cancel, |step| {
+                    let _ = tx2.send(Note::StepA(step));
+                });
                 let _ = tx.send(Note::SettledA(Box::new(outcome)));
             }
         });
 
         self.stage = Stage::Working(Box::new(Working {
-            source,
+            job,
             phase: Phase::A(phase_a::Step::Reading),
             cancel,
             inbox,
             work,
-            held,
         }));
     }
 
     fn finish_phase_a(&mut self, outcome: phase_a::Outcome) {
-        let Stage::Working(working) = &mut self.stage else {
-            return;
-        };
         match outcome {
-            phase_a::Outcome::Settled(material) => {
-                working.held.material = Some(material);
-                self.show_bench(None);
-            }
+            phase_a::Outcome::Settled(material) => self.show_bench(material, None, None),
             // Nothing was produced and nothing was lost, so the charter goes
             // back to exactly where they pressed the button -- trim included.
-            phase_a::Outcome::Cancelled => self.back_to_inspect_from_work(),
+            phase_a::Outcome::Cancelled => {
+                if let Stage::Working(working) = std::mem::replace(&mut self.stage, Stage::Empty) {
+                    self.reopen(working.job);
+                }
+            }
             phase_a::Outcome::Failed(reason) => self.give_up(&reason),
         }
     }
 
     /// Phase B: the fight with 80 MB. `aim` is what the bench decided it is for.
     fn start_phase_b(&mut self, aim: Aim) {
-        if !matches!(self.stage, Stage::Bench(_)) {
-            return;
-        }
         let Some(ffmpeg) = self.ffmpeg.clone() else {
             return;
         };
-        let Stage::Bench(bench) = std::mem::replace(&mut self.stage, Stage::Empty) else {
-            unreachable!("checked above");
+        // TAKEN, and put back if it was not the screen this belongs to. The old
+        // shape tested the stage, moved it out, and then asserted through an
+        // `unreachable!` that it was still what the test had just said -- a
+        // panic standing in for a fact the compiler was never told. One match is
+        // the whole test now, and the failing arm costs the charter nothing.
+        let bench = match std::mem::replace(&mut self.stage, Stage::Empty) {
+            Stage::Bench(bench) => *bench,
+            other => {
+                self.stage = other;
+                return;
+            }
         };
-        let bench = *bench;
-        let opening_cut = bench.trim.cut_opening;
         let work = Arc::clone(&bench.work);
-        let window = bench.crop_window();
+        let asked = bench.outstanding();
 
         // The worker gets its own copy. `Material` is a path and some numbers,
         // so this costs nothing and it means no lifetime has to cross a thread
@@ -909,46 +949,28 @@ impl Press {
             let work = Arc::clone(&work);
             move || {
                 let tx2 = tx.clone();
-                let outcome = phase_b::run(
-                    &ffmpeg,
-                    &material,
-                    aim,
-                    opening_cut,
-                    window,
-                    &work,
-                    &cancel,
-                    |step| {
-                        let _ = tx2.send(Note::Step(Phase::B(step)));
-                    },
-                );
+                let outcome =
+                    phase_b::run(&ffmpeg, &material, aim, &asked, &work, &cancel, |step| {
+                        let _ = tx2.send(Note::StepB(step));
+                    });
                 let _ = tx.send(Note::FittedB(Box::new(outcome)));
             }
         });
 
         self.stage = Stage::Working(Box::new(Working {
-            source: bench.source,
-            phase: Phase::B(phase_b::Step::Encoding {
-                crf: crate::plan::CRF,
-                attempt: 1,
-                progress: None,
-            }),
+            job: bench.job,
+            phase: Phase::B {
+                material: bench.material,
+                best: bench.encoded,
+                step: phase_b::Step::Encoding {
+                    crf: crate::plan::CRF,
+                    attempt: 1,
+                    progress: None,
+                },
+            },
             cancel,
             inbox,
             work,
-            held: Held {
-                source_bytes: bench.source_bytes,
-                source_facts: bench.source_facts,
-                // CARRIED WHOLE, and untouched by this phase. Phase B is told
-                // its opening cut as an argument; `held.trim` is the charter's
-                // own trim, on its way to whichever screen comes next. Blanking
-                // the tail here -- on the grounds that Phase A had already cut
-                // it -- is what left the scrubber with no end handle after a
-                // run that ended by advising a shorter video.
-                trim: bench.trim,
-                crop: bench.crop,
-                material: Some(bench.material),
-                encoded: bench.encoded,
-            },
         }));
     }
 
@@ -956,42 +978,49 @@ impl Press {
         let Stage::Working(working) = &mut self.stage else {
             return;
         };
-        let said = match outcome {
-            // A better file. Anything Phase B produced before it is superseded,
-            // and the workspace will take the loser with it.
-            phase_b::Outcome::Encoded(done) => {
-                working.held.encoded = Some(done);
-                None
-            }
-            phase_b::Outcome::MaterialWins { av1_was } => Some(Said::MaterialWins { av1_was }),
-            phase_b::Outcome::RequestDropped => Some(Said::RequestDropped),
-            phase_b::Outcome::StillTooLarge { smallest } => Some(Said::StillTooLarge { smallest }),
-            phase_b::Outcome::Cancelled => Some(Said::Cancelled),
-            phase_b::Outcome::Failed(reason) => Some(Said::Failed(reason)),
+        let Phase::B { material, best, .. } = &mut working.phase else {
+            return;
         };
-        self.show_bench(said);
+        let material = material.clone();
+        // A better file supersedes whatever came before it, and the workspace
+        // takes the loser with it.
+        let (encoded, said) = match outcome {
+            phase_b::Outcome::Encoded(done) => (Some(done), None),
+            phase_b::Outcome::MaterialWins { av1_was } => {
+                (best.take(), Some(Said::MaterialWins { av1_was }))
+            }
+            phase_b::Outcome::RequestDropped => (best.take(), Some(Said::RequestDropped)),
+            phase_b::Outcome::StillTooLarge { smallest } => {
+                (best.take(), Some(Said::StillTooLarge { smallest }))
+            }
+            phase_b::Outcome::Cancelled => (best.take(), Some(Said::Cancelled)),
+            phase_b::Outcome::Failed(reason) => (best.take(), Some(Said::Failed(reason))),
+        };
+        self.show_bench(material, encoded, said);
     }
 
     /// Rebuild the bench from the run that just finished.
-    fn show_bench(&mut self, said: Option<Said>) {
+    ///
+    /// The material is an ARGUMENT rather than something fished back out of the
+    /// stage, because both callers already hold one: Phase A has just produced
+    /// it and Phase B has been carrying it all along. Reaching for it through an
+    /// `Option` here bought an "only reachable if Phase A reported success
+    /// without a material, which it cannot" branch -- a dead end written for a
+    /// state the types now refuse to represent.
+    fn show_bench(
+        &mut self,
+        material: Box<Material>,
+        encoded: Option<Box<Encoded>>,
+        said: Option<Said>,
+    ) {
         let Stage::Working(working) = std::mem::replace(&mut self.stage, Stage::Empty) else {
             return;
         };
         let working = *working;
-        let Some(material) = working.held.material else {
-            // Only reachable if Phase A reported success without a material,
-            // which it cannot.
-            self.give_up("the run finished without producing anything");
-            return;
-        };
         self.stage = Stage::Bench(Box::new(Bench {
-            source: working.source,
-            source_bytes: working.held.source_bytes,
-            source_facts: working.held.source_facts,
-            trim: working.held.trim,
-            crop: working.held.crop,
+            job: working.job,
             material,
-            encoded: working.held.encoded,
+            encoded,
             said,
             saved: None,
             work: working.work,
@@ -1013,7 +1042,7 @@ impl Press {
         let from = from.to_path_buf();
         let Some(to) = rfd::FileDialog::new()
             .set_title(text::SAVE_TITLE.get(self.lang))
-            .set_directory(bench.source.parent().unwrap_or(Path::new(".")))
+            .set_directory(bench.job.source.parent().unwrap_or(Path::new(".")))
             .set_file_name("video.mp4")
             .add_filter("MP4", &["mp4"])
             .save_file()
@@ -1047,92 +1076,26 @@ impl Press {
     fn give_up(&mut self, reason: &str) {
         self.trouble = Some(reason.to_owned());
         self.stage = Stage::Empty;
-        self.texture = None;
     }
 
-    /// Back to the scrubber from a cancelled run, with the trim intact.
-    fn back_to_inspect_from_work(&mut self) {
-        let Stage::Working(working) = std::mem::replace(&mut self.stage, Stage::Empty) else {
-            return;
-        };
-        let working = *working;
-        self.reopen(
-            working.source,
-            working.held.source_bytes,
-            working.held.source_facts,
-            working.held.trim,
-            working.held.crop,
-        );
-    }
-
-    /// Back to the scrubber from the bench, with BOTH handles where the charter
-    /// left them.
+    /// Back to the scrubber, with everything the charter decided still on it.
     ///
-    /// This screen is reached from "even at the lowest quality it will not fit
-    /// -- make it shorter", so the trim is the entire point of arriving. Rebuilt
-    /// with only the opening kept, it discarded the end handle and offered the
-    /// full source back: shortening a sixty-second trim by five seconds instead
-    /// lengthened it by fifty.
-    fn back_to_inspect(&mut self) {
-        let Stage::Bench(bench) = std::mem::replace(&mut self.stage, Stage::Empty) else {
-            return;
-        };
-        let bench = *bench;
-        self.reopen(
-            bench.source,
-            bench.source_bytes,
-            bench.source_facts,
-            bench.trim,
-            bench.crop,
-        );
-    }
-
-    fn reopen(
-        &mut self,
-        source: PathBuf,
-        bytes: u64,
-        facts: Facts,
-        trim: Trim,
-        crop: Option<crop::Choice>,
-    ) {
-        let preview = self.ffmpeg.as_ref().map(|ffmpeg| {
-            let preview = Preview::open(
-                ffmpeg.binary(),
-                &source,
-                facts.width,
-                facts.height,
-                facts.fps,
-            );
-            preview.seek(0.0);
-            preview
-        });
-        self.texture = None;
-        self.shown_pts = f64::NAN;
+    /// Reached from a cancelled run, and from "even at the lowest quality it
+    /// will not fit -- make it shorter", where the trim is the entire point of
+    /// arriving. It used to take the job apart into five arguments and put it
+    /// back together, and the tail of the trim did not survive the trip: the one
+    /// screen a charter is sent to in order to SHORTEN their video opened with
+    /// the whole source back in it.
+    fn reopen(&mut self, job: Job) {
         self.stage = Stage::Inspect(Box::new(Inspect {
-            path: source,
-            bytes,
-            facts: Some(facts),
-            preview,
+            view: self
+                .ffmpeg
+                .as_ref()
+                .map(|ffmpeg| Viewfinder::open(ffmpeg, &job.source, &job.facts)),
+            job,
             at: 0.0,
-            crop,
-            trim,
         }));
     }
-}
-
-/// What a run carries on behalf of the screen that comes after it.
-///
-/// The worker knows nothing about screens, and the screen it came from is gone
-/// while it runs -- so everything the next one needs travels with the run.
-struct Held {
-    source_bytes: u64,
-    source_facts: Facts,
-    trim: Trim,
-    crop: Option<crop::Choice>,
-    /// Phase A's output. `None` only while Phase A is still producing it.
-    material: Option<Box<Material>>,
-    /// The best Phase B result so far, kept across a run that does worse.
-    encoded: Option<Box<Encoded>>,
 }
 
 /// Whether two paths name the same file on disk.
@@ -1268,13 +1231,14 @@ fn wrapped_centre(
 
 impl Press {
     fn inspect(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        self.refresh_texture(ctx);
         let lang = self.lang;
-        let texture = self.texture.clone();
         let no_encoder = self.ffmpeg.is_none();
         let Stage::Inspect(loaded) = &mut self.stage else {
             return;
         };
+        if let Some(view) = &mut loaded.view {
+            view.refresh(ctx);
+        }
 
         let body = ui.max_rect();
         let workbench = egui::Rect::from_min_max(
@@ -1285,43 +1249,15 @@ impl Press {
             egui::Rect::from_min_max(egui::pos2(body.right() - READOUT_W, body.top()), body.max);
 
         region(ui, "the workbench", workbench, |ui| {
-            workbench_column(ui, lang, loaded, texture.as_ref());
+            workbench_column(ui, lang, loaded);
         });
         let mut picked = None;
         region(ui, "the readout", readout, |ui| {
             picked = verdict_card(ui, lang, loaded, no_encoder);
         });
         if let Some(choice) = picked {
-            loaded.crop = choice;
+            loaded.job.crop = choice;
         }
-    }
-
-    fn refresh_texture(&mut self, ctx: &egui::Context) {
-        let Stage::Inspect(loaded) = &self.stage else {
-            return;
-        };
-        let Some(preview) = &loaded.preview else {
-            return;
-        };
-        let Some(frame) = preview.frame() else {
-            return;
-        };
-        if frame.pts == self.shown_pts && self.texture.is_some() {
-            return;
-        }
-
-        let image = egui::ColorImage::from_rgba_unmultiplied(
-            [frame.width as usize, frame.height as usize],
-            &frame.rgba,
-        );
-        match &mut self.texture {
-            Some(handle) => handle.set(image, egui::TextureOptions::LINEAR),
-            None => {
-                self.texture =
-                    Some(ctx.load_texture("preview", image, egui::TextureOptions::LINEAR))
-            }
-        }
-        self.shown_pts = frame.pts;
     }
 
     /// Centred in the body: there is nothing else to look at, and a progress bar
@@ -1345,14 +1281,20 @@ impl Press {
                 p.and_then(|p| p.fraction),
                 written_line(lang, p.map(|p| p.bytes)),
             ),
-            Phase::A(phase_a::Step::Verifying) | Phase::B(phase_b::Step::Verifying) => {
-                (text::STEP_VERIFYING.get(lang).to_owned(), None, Vec::new())
-            }
-            Phase::B(phase_b::Step::Encoding {
-                crf,
-                attempt,
-                progress,
-            }) => {
+            Phase::A(phase_a::Step::Verifying)
+            | Phase::B {
+                step: phase_b::Step::Verifying,
+                ..
+            } => (text::STEP_VERIFYING.get(lang).to_owned(), None, Vec::new()),
+            Phase::B {
+                step:
+                    phase_b::Step::Encoding {
+                        crf,
+                        attempt,
+                        progress,
+                    },
+                ..
+            } => {
                 // THE ATTEMPT NUMBER, from the second one onward. Without it a
                 // search that takes three encodes fills the bar, resets it, and
                 // shows the identical sentence again -- and from the outside
@@ -1374,7 +1316,10 @@ impl Press {
                 );
                 (label, progress.and_then(|p| p.fraction), detail)
             }
-            Phase::B(phase_b::Step::Recalibrating { from, to }) => (
+            Phase::B {
+                step: phase_b::Step::Recalibrating { from, to },
+                ..
+            } => (
                 text::STEP_RECALIBRATING
                     .get(lang)
                     .replace("{from}", &from.to_string())
@@ -1383,7 +1328,7 @@ impl Press {
                 Vec::new(),
             ),
         };
-        let name = file_name(&working.source);
+        let name = file_name(&working.job.source);
 
         centred(ui, "working", |ui| {
             theme::card(ui, |ui| {
@@ -1457,7 +1402,7 @@ impl Press {
                 // a headline that said "one more pass needed" without saying of
                 // what, and the same number printed in two roundings three lines
                 // apart. Labels cannot rescue a headline that says nothing.
-                theme::muted(ui, &file_name(&bench.source));
+                theme::muted(ui, &file_name(&bench.job.source));
                 ui.add_space(space::BLOCK);
 
                 let (hero, colour) = headline(bench, blocked, requested, lang);
@@ -1474,7 +1419,7 @@ impl Press {
                 // line that matters.
                 if let Some(done) = &bench.encoded {
                     ui.add_space(space::ROW);
-                    theme::tally(ui, &megabytes(bench.source_bytes), &megabytes(done.bytes));
+                    theme::tally(ui, &megabytes(bench.job.bytes), &megabytes(done.bytes));
                     // Both directions. Hiding the growth would leave the
                     // charter to find it in the two numbers directly above.
                     if let Some(delta) = delta_line(bench, lang) {
@@ -1539,7 +1484,7 @@ fn headline(
             if bench
                 .encoded
                 .as_ref()
-                .is_some_and(|d| d.bytes < bench.source_bytes)
+                .is_some_and(|d| d.bytes < bench.job.bytes)
             {
                 text::BENCH_COMPRESSED.get(lang)
             } else {
@@ -1614,11 +1559,11 @@ const SEP: &str = " · ";
 /// nobody believes about anything.
 fn delta_line(bench: &Bench, lang: Lang) -> Option<String> {
     let done = bench.encoded.as_ref()?;
-    if bench.source_bytes == 0 || done.bytes == bench.source_bytes {
+    if bench.job.bytes == 0 || done.bytes == bench.job.bytes {
         return None;
     }
-    let ratio = done.bytes as f64 / bench.source_bytes as f64;
-    let (template, percent) = if done.bytes < bench.source_bytes {
+    let ratio = done.bytes as f64 / bench.job.bytes as f64;
+    let (template, percent) = if done.bytes < bench.job.bytes {
         (&text::BENCH_SMALLER, (1.0 - ratio) * 100.0)
     } else {
         (&text::BENCH_BIGGER, (ratio - 1.0) * 100.0)
@@ -1683,7 +1628,7 @@ fn did_line(bench: &Bench, lang: Lang) -> Option<String> {
         // act: one throws picture away, the other keeps all of it at fewer
         // pixels. Which happened is knowable only from the choice that was made,
         // because the result looks identical from the outside.
-        let cropped = bench.crop.and_then(|choice| choice.window(before));
+        let cropped = bench.job.crop.and_then(|choice| choice.window(before));
         if let Some(window) = cropped {
             did.push(
                 text::DID_CROP
@@ -1712,11 +1657,11 @@ fn did_line(bench: &Bench, lang: Lang) -> Option<String> {
             );
         }
 
-        if bench.trim.cut_opening > 0.0 {
+        if bench.job.trim.cut_opening > 0.0 {
             did.push(
                 text::DID_OPENING
                     .get(lang)
-                    .replace("{shift}", &clock(bench.trim.cut_opening)),
+                    .replace("{shift}", &clock(bench.job.trim.cut_opening)),
             );
         }
 
@@ -1934,12 +1879,7 @@ const TRANSPORT_H: f32 = crate::timeline::HEIGHT + space::TIGHT + ROW_H + space:
 const LINE_H: f32 = 18.0;
 const ROW_H: f32 = 34.0;
 
-fn workbench_column(
-    ui: &mut egui::Ui,
-    lang: Lang,
-    loaded: &mut Inspect,
-    texture: Option<&egui::TextureHandle>,
-) {
+fn workbench_column(ui: &mut egui::Ui, lang: Lang, loaded: &mut Inspect) {
     let column = ui.max_rect();
     let controls = slice_bottom(column, TRANSPORT_H);
     let glass = egui::Rect::from_min_max(
@@ -1947,15 +1887,16 @@ fn workbench_column(
         egui::pos2(column.right(), controls.top() - space::ROW),
     );
 
-    let source = loaded
-        .facts
-        .as_ref()
-        .map_or((0, 0), |facts| facts.picture());
-    let mut crop = loaded.crop;
+    // Real dimensions, always. This used to fall back to `(0, 0)` for a file
+    // whose header could not be read -- a nonsense pair fed straight into the
+    // crop geometry, for a screen that should never have been opened.
+    let source = loaded.job.facts.picture();
+    let texture = loaded.view.as_ref().and_then(|v| v.texture.clone());
+    let mut crop = loaded.job.crop;
     region(ui, "the viewport", glass, |ui| {
-        viewport(ui, texture, glass.size(), source, &mut crop);
+        viewport(ui, texture.as_ref(), glass.size(), source, &mut crop);
     });
-    loaded.crop = crop;
+    loaded.job.crop = crop;
     region(ui, "the transport", controls, |ui| {
         transport(ui, lang, loaded)
     });
@@ -2007,7 +1948,10 @@ fn viewport(
         .paint_at(ui, shown);
 
     // ── the crop, shown on the picture it is a crop of ────────────────
-    let Some(choice) = *crop else {
+    // Borrowed, not copied out. Taking a copy meant reaching back through the
+    // same `Option` to write the drag into it, which needed an `expect` for a
+    // case the line above had already ruled out.
+    let Some(choice) = crop.as_mut() else {
         return;
     };
     let Some(window) = choice.window(source) else {
@@ -2036,7 +1980,7 @@ fn viewport(
             crop::Along::Vertical => (by.y, shown.height() * (sh - window.height as f32) / sh),
         };
         if room > 0.5 {
-            crop.as_mut().expect("chosen").offset = (choice.offset + moved / room).clamp(0.0, 1.0);
+            choice.offset = (choice.offset + moved / room).clamp(0.0, 1.0);
         }
     }
     if response.hovered() || response.dragged() {
@@ -2083,19 +2027,12 @@ fn viewport(
 /// Transport, timeline and what the trim currently means. Written bottom-up so
 /// it can be dropped into a bottom-up layout unchanged.
 fn transport(ui: &mut egui::Ui, lang: Lang, loaded: &mut Inspect) {
-    // Destructured so the preview, the position and the trim are three separate
-    // borrows: the transport reads one and writes the others in the same breath,
-    // which through `loaded.` alone the compiler cannot allow.
-    let Inspect {
-        facts,
-        preview,
-        at,
-        trim,
-        ..
-    } = loaded;
-    let Some(facts) = facts.as_ref() else {
-        return;
-    };
+    // Destructured so the viewfinder, the position and the trim are three
+    // separate borrows: the transport reads one and writes the others in the
+    // same breath, which through `loaded.` alone the compiler cannot allow.
+    let Inspect { job, at, view } = loaded;
+    let preview = view.as_ref().map(|v| &v.preview);
+    let (facts, trim) = (&job.facts, &mut job.trim);
     let duration = facts.duration.max(0.001);
 
     // A source's last frame sits one interval BEFORE its duration, so asking the
@@ -2193,8 +2130,8 @@ fn verdict_card(
     loaded: &Inspect,
     no_encoder: bool,
 ) -> Option<Option<crop::Choice>> {
-    let opening = loaded.trim.cut_opening;
-    let chose = loaded.crop;
+    let opening = loaded.job.trim.cut_opening;
+    let chose = loaded.job.crop;
     // Handed back rather than written here, so the card keeps its shared
     // reference and the caller owns every change to the stage.
     let mut picked = None;
@@ -2210,14 +2147,10 @@ fn verdict_card(
         // scene in three folders cannot tell them apart by file name, and the
         // one thing a formatter must never be vague about is which file it is
         // looking at.
-        theme::path(ui, &loaded.path.to_string_lossy());
+        theme::path(ui, &loaded.job.source.to_string_lossy());
         ui.add_space(space::TIGHT);
 
-        let Some(facts) = &loaded.facts else {
-            theme::heading(ui, text::VERDICT_UNREADABLE.get(lang), theme::ALARM);
-            // Nothing readable, so nothing to offer a crop of.
-            return;
-        };
+        let facts = &loaded.job.facts;
 
         // SIZE IS NOT MENTIONED HERE, and its absence is the whole point of the
         // phase split. Whether this video fits in 80 MB is not a deterministic
@@ -2241,7 +2174,7 @@ fn verdict_card(
             theme::heading(ui, text::VERDICT_WILL_FIX.get(lang), theme::NOTICE);
         }
         ui.add_space(space::TIGHT);
-        theme::muted(ui, &shape(facts, loaded.bytes));
+        theme::muted(ui, &shape(facts, loaded.job.bytes));
 
         // Every finding, not only the first. The gate reports one violation
         // because it is refusing; Press is fixing, so it lists all of them --
@@ -2455,7 +2388,7 @@ fn reveal(path: &Path) {
 ///
 /// Size is excluded on both sides, because it is exactly what the inspect screen
 /// declines to have an opinion about.
-#[allow(dead_code)]
+#[cfg(test)]
 fn verdict_matches_findings(facts: &Facts, lang: Lang) -> bool {
     // Under the limit by construction, so `check` can only complain about the
     // deterministic rules.
@@ -2583,16 +2516,22 @@ mod tests {
         }
     }
 
-    fn a_bench(applied: Vec<Applied>, encoded: Option<Box<Encoded>>, said: Option<Said>) -> Bench {
-        Bench {
+    fn a_job() -> Job {
+        Job {
             source: PathBuf::from(LONG),
-            source_bytes: 98_000_000,
-            source_facts: facts_of("h264", 3840, 2160, 120.0),
+            bytes: 98_000_000,
+            facts: facts_of("h264", 3840, 2160, 120.0),
             trim: Trim {
                 cut_opening: 1.5,
                 keep_until: None,
             },
             crop: None,
+        }
+    }
+
+    fn a_bench(applied: Vec<Applied>, encoded: Option<Box<Encoded>>, said: Option<Said>) -> Bench {
+        Bench {
+            job: a_job(),
             material: Box::new(Material::for_test(
                 PathBuf::from(LONG),
                 96_000_000,
@@ -2628,32 +2567,34 @@ mod tests {
             run(&mut press, &ctx, 2);
 
             // Both phases running.
+            let in_phase_b = |step| Phase::B {
+                material: Box::new(Material::for_test(
+                    PathBuf::from(LONG),
+                    38_200_000,
+                    facts_of("h264", 1080, 816, 24.0),
+                    vec![Applied::AudioDropped],
+                )),
+                best: None,
+                step,
+            };
             let phases = [
                 Phase::A(phase_a::Step::Copying(Some(sample))),
                 Phase::A(phase_a::Step::Verifying),
-                Phase::B(phase_b::Step::Encoding {
+                in_phase_b(phase_b::Step::Encoding {
                     crf: 26,
                     attempt: 2,
                     progress: Some(sample),
                 }),
-                Phase::B(phase_b::Step::Recalibrating { from: 32, to: 20 }),
+                in_phase_b(phase_b::Step::Recalibrating { from: 32, to: 20 }),
             ];
             for phase in phases {
                 let (_tx, inbox) = channel();
                 press.stage = Stage::Working(Box::new(Working {
-                    source: PathBuf::from(LONG),
+                    job: a_job(),
                     phase,
                     cancel: Cancel::new(),
                     inbox,
                     work: Arc::new(Workspace::open().expect("a workspace")),
-                    held: Held {
-                        source_bytes: 98_000_000,
-                        source_facts: facts_of("h264", 3840, 2160, 120.0),
-                        trim: Trim::default(),
-                        crop: None,
-                        material: None,
-                        encoded: None,
-                    },
                 }));
                 run(&mut press, &ctx, 2);
             }
@@ -2699,12 +2640,15 @@ mod tests {
                 // which is the longest that line can be, and it wraps -- so it
                 // is the case that decides whether the card still fits.
                 Bench {
-                    crop: Some(crop::Choice::centred(crop::Shape::Wide)),
-                    trim: Trim {
-                        cut_opening: 1.2,
-                        keep_until: None,
+                    job: Job {
+                        crop: Some(crop::Choice::centred(crop::Shape::Wide)),
+                        trim: Trim {
+                            cut_opening: 1.2,
+                            keep_until: None,
+                        },
+                        facts: facts_of("vp09", 5120, 2160, 120.0),
+                        ..a_job()
                     },
-                    source_facts: facts_of("vp09", 5120, 2160, 120.0),
                     material: Box::new(Material::for_test(
                         PathBuf::from(LONG),
                         390_000_000,
@@ -2735,7 +2679,10 @@ mod tests {
                 // findings, each two lines, in the language that words them
                 // longest.
                 Bench {
-                    source_facts: facts_of("vp09", 3840, 2160, 120.0),
+                    job: Job {
+                        facts: facts_of("vp09", 3840, 2160, 120.0),
+                        ..a_job()
+                    },
                     material: Box::new(Material::for_test(
                         PathBuf::from(LONG),
                         396_000_000,
@@ -2756,8 +2703,11 @@ mod tests {
                 // the growth -- neither of which any other bench here exercises,
                 // because every other encode is smaller than its source.
                 Bench {
-                    source_bytes: 2_689_216,
-                    crop: Some(crop::Choice::centred(crop::Shape::Wide)),
+                    job: Job {
+                        bytes: 2_689_216,
+                        crop: Some(crop::Choice::centred(crop::Shape::Wide)),
+                        ..a_job()
+                    },
                     ..a_bench(
                         vec![Applied::AudioDropped],
                         Some(Box::new(Encoded {
@@ -2786,7 +2736,10 @@ mod tests {
                 ),
                 // A crop that could not be carried out without gaining weight.
                 Bench {
-                    crop: Some(crop::Choice::centred(crop::Shape::Wide)),
+                    job: Job {
+                        crop: Some(crop::Choice::centred(crop::Shape::Wide)),
+                        ..a_job()
+                    },
                     ..a_bench(
                         vec![Applied::AudioDropped],
                         None,
@@ -2837,7 +2790,7 @@ mod tests {
         // 1080x606".
         let requested = pending.iter().any(|item| !item.is_a_problem());
         let (_, bytes, facts) = bench.have();
-        let mut lines = vec![file_name(&bench.source)];
+        let mut lines = vec![file_name(&bench.job.source)];
 
         // THE CARD'S OWN FUNCTIONS, not a restatement of them. Every line below
         // comes from the code that paints it, so a wording bug shows up here
@@ -2849,7 +2802,7 @@ mod tests {
         if let Some(done) = &bench.encoded {
             lines.push(format!(
                 "{} → {}",
-                megabytes(bench.source_bytes),
+                megabytes(bench.job.bytes),
                 megabytes(done.bytes)
             ));
             if let Some(delta) = delta_line(bench, lang) {
@@ -2898,11 +2851,12 @@ mod tests {
                      encoded: Option<Box<Encoded>>| {
             let facts = source.clone();
             Bench {
-                source: PathBuf::from(LONG),
-                source_bytes,
-                source_facts: source,
-                trim: Trim::default(),
-                crop: None,
+                job: Job {
+                    bytes: source_bytes,
+                    facts: source,
+                    trim: Trim::default(),
+                    ..a_job()
+                },
                 material: Box::new(Material::for_test(
                     PathBuf::from(LONG),
                     material_bytes,
@@ -2980,8 +2934,8 @@ mod tests {
                         encodes: 2,
                     })),
                 );
-                bench.crop = Some(crop::Choice::centred(crop::Shape::Wide));
-                bench.trim.cut_opening = 1.2;
+                bench.job.crop = Some(crop::Choice::centred(crop::Shape::Wide));
+                bench.job.trim.cut_opening = 1.2;
                 bench
             }),
             ("a crop asked for and not yet applied", {
@@ -2992,7 +2946,7 @@ mod tests {
                     23_700_000,
                     None,
                 );
-                bench.crop = Some(crop::Choice::centred(crop::Shape::Wide));
+                bench.job.crop = Some(crop::Choice::centred(crop::Shape::Wide));
                 bench
             }),
             (
@@ -3032,7 +2986,7 @@ mod tests {
                         encodes: 1,
                     })),
                 );
-                bench.crop = Some(crop::Choice::centred(crop::Shape::Wide));
+                bench.job.crop = Some(crop::Choice::centred(crop::Shape::Wide));
                 bench
             }),
             // And the answer to it: the request goes rather than the weight.
@@ -3044,7 +2998,7 @@ mod tests {
                     2_399_618,
                     None,
                 );
-                bench.crop = Some(crop::Choice::centred(crop::Shape::Wide));
+                bench.job.crop = Some(crop::Choice::centred(crop::Shape::Wide));
                 bench.said = Some(Said::RequestDropped);
                 bench
             }),

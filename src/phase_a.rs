@@ -37,7 +37,8 @@ use std::path::{Path, PathBuf};
 
 use crate::ffmpeg::{Cancel, Ffmpeg, Progress, Ran, Watching};
 use crate::gate::Facts;
-use crate::plan::{self, Encode, Target, Trim};
+use crate::job::Job;
+use crate::plan::{self, Encode, Target};
 use crate::verify::{self, Expect};
 use crate::workspace::Workspace;
 
@@ -116,21 +117,25 @@ pub enum Outcome {
 }
 
 /// Run the deterministic pass.
-#[allow(clippy::too_many_arguments)]
 ///
-/// `trim` is the charter's own decision from the scrubber. Only its tail half is
-/// applied here; moving the opening needs `-ss`, which forces a re-encode, so it
-/// travels to Phase B with the rest of the picture work.
+/// Only the TAIL half of the charter's trim is applied here; moving the opening
+/// needs `-ss`, which forces a re-encode, so it travels to Phase B with the rest
+/// of the picture work.
 pub fn run(
     ffmpeg: &Ffmpeg,
-    source: &Path,
-    facts: &Facts,
-    source_bytes: u64,
-    trim: Trim,
+    job: &Job,
     work: &Workspace,
     cancel: &Cancel,
     mut on_step: impl FnMut(Step),
 ) -> Outcome {
+    let Job {
+        source,
+        bytes: source_bytes,
+        facts,
+        trim,
+        ..
+    } = job;
+    let (source, source_bytes) = (source.as_path(), *source_bytes);
     on_step(Step::Reading);
 
     // `keep_until` is an ABSOLUTE position in the source, which is what `-t`
@@ -192,11 +197,18 @@ pub fn run(
             return Outcome::Failed(format!("the lossless pass failed: {error}"));
         }
         // A partial MP4 left on disk is worse than none: it looks like a result.
-        Ok(Ran::Cancelled) => {
+        //
+        // The two stopped-early cases are ONE case here. The watcher above
+        // returns `Continue` unconditionally, so nothing can abandon this run --
+        // and were that ever untrue, "it stopped without finishing" is precisely
+        // what `Cancelled` already means. This arm used to be an `unreachable!`,
+        // which is a panic on a worker thread: it would have taken the window
+        // down with it, and left the charter looking at a progress bar that had
+        // stopped moving for a reason nothing on screen could name.
+        Ok(Ran::Cancelled | Ran::Abandoned) => {
             let _ = std::fs::remove_file(&output);
             return Outcome::Cancelled;
         }
-        Ok(Ran::Abandoned) => unreachable!("the lossless pass is never abandoned"),
         Ok(Ran::ToCompletion) => {}
     }
 

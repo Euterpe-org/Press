@@ -28,6 +28,7 @@ use std::time::{Duration, Instant};
 
 use euterpe_press::ffmpeg::{Cancel, Ffmpeg};
 use euterpe_press::gate;
+use euterpe_press::job::{Job, Request};
 use euterpe_press::plan::Trim;
 use euterpe_press::preview::{Frame, Preview};
 use euterpe_press::workspace::Workspace;
@@ -126,25 +127,26 @@ fn produce(
     let source_bytes = bytes.len() as u64;
     drop(bytes);
 
-    let settled = phase_a::run(
-        ffmpeg,
-        source,
-        &facts,
-        source_bytes,
+    let job = Job {
+        source: source.to_path_buf(),
+        bytes: source_bytes,
+        facts,
         trim,
-        &work,
-        &cancel,
-        |_| {},
-    );
+        crop: None,
+    };
+    let settled = phase_a::run(ffmpeg, &job, &work, &cancel, |_| {});
     let phase_a::Outcome::Settled(material) = settled else {
         panic!("the lossless pass produced nothing: {settled:?}");
     };
 
     // The opening cut is Phase B's, because it needs `-ss` and `-ss` re-encodes.
-    let cut = trim.cut_opening;
-    let from = match phase_b::aim(&material.facts, material.bytes, cut, None) {
+    let asked = Request {
+        opening_cut: trim.cut_opening,
+        crop: None,
+    };
+    let from = match phase_b::aim(&material.facts, material.bytes, &asked) {
         Some(aim) => {
-            match phase_b::run(ffmpeg, &material, aim, cut, None, &work, &cancel, |_| {}) {
+            match phase_b::run(ffmpeg, &material, aim, &asked, &work, &cancel, |_| {}) {
                 phase_b::Outcome::Encoded(done) => done.path.clone(),
                 phase_b::Outcome::MaterialWins { .. } => material.path().to_path_buf(),
                 // The workspace listing comes with it: "it failed" without what was

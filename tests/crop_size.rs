@@ -13,6 +13,7 @@
 
 use euterpe_press::crop::{Choice, Shape};
 use euterpe_press::ffmpeg::{Cancel, Ffmpeg};
+use euterpe_press::job::{Job, Request};
 use euterpe_press::plan::Trim;
 use euterpe_press::workspace::Workspace;
 use euterpe_press::{gate, phase_a, phase_b};
@@ -42,10 +43,13 @@ fn a_crop_never_makes_the_file_bigger() {
 
     let settled = phase_a::run(
         &ffmpeg,
-        &source,
-        &facts,
-        source_bytes,
-        Trim::default(),
+        &Job {
+            source: source.to_path_buf(),
+            bytes: source_bytes,
+            facts: facts.clone(),
+            trim: Trim::default(),
+            crop: None,
+        },
         &work,
         &cancel,
         |_| {},
@@ -62,24 +66,19 @@ fn a_crop_never_makes_the_file_bigger() {
     // The aim itself has to be right. Reaching here as `Rescue` is the original
     // bug: that path treats the gate's 80 MB as a budget to spend, on a file
     // that was never anywhere near it.
-    let aim = phase_b::aim(&material.facts, material.bytes, 0.0, Some(window))
-        .expect("a crop needs an encode");
+    let asked = Request {
+        opening_cut: 0.0,
+        crop: Some(window),
+    };
+    let aim =
+        phase_b::aim(&material.facts, material.bytes, &asked).expect("a crop needs an encode");
     assert_eq!(
         aim,
         phase_b::Aim::Apply,
         "a crop on a conforming file is a request, not a rescue"
     );
 
-    let outcome = phase_b::run(
-        &ffmpeg,
-        &material,
-        aim,
-        0.0,
-        Some(window),
-        &work,
-        &cancel,
-        |_| {},
-    );
+    let outcome = phase_b::run(&ffmpeg, &material, aim, &asked, &work, &cancel, |_| {});
     let phase_b::Outcome::Encoded(done) = outcome else {
         panic!("the crop had to be applied: {outcome:?}");
     };

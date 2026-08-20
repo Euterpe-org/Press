@@ -13,6 +13,7 @@ use std::process::ExitCode;
 use euterpe_press::app::Press;
 use euterpe_press::gate::{self, Verdict};
 use euterpe_press::i18n::{Lang, text};
+use euterpe_press::job::{Job, Request};
 use euterpe_press::plan::Trim;
 use euterpe_press::workspace::Workspace;
 use euterpe_press::{phase_a, phase_b};
@@ -187,27 +188,28 @@ fn repair(path: &Path) -> bool {
         }
     };
 
+    // Nothing is asked of anyone here, so the job carries no requests: the
+    // batch tool formats what it is given and never crops or moves an opening.
+    let job = Job {
+        source: path.to_path_buf(),
+        bytes: source_bytes,
+        facts,
+        trim: Trim::default(),
+        crop: None,
+    };
+
     // ── Phase A ──────────────────────────────────────────────────────────
-    let settled = phase_a::run(
-        &ffmpeg,
-        path,
-        &facts,
-        source_bytes,
-        Trim::default(),
-        &work,
-        &cancel,
-        |step| {
-            say(match step {
-                phase_a::Step::Reading => "reading".to_owned(),
-                phase_a::Step::Copying(p) => format!(
-                    "lossless pass {} {}",
-                    percent(p.and_then(|p| p.fraction)),
-                    written(p.map(|p| p.bytes)),
-                ),
-                phase_a::Step::Verifying => "verifying".to_owned(),
-            });
-        },
-    );
+    let settled = phase_a::run(&ffmpeg, &job, &work, &cancel, |step| {
+        say(match step {
+            phase_a::Step::Reading => "reading".to_owned(),
+            phase_a::Step::Copying(p) => format!(
+                "lossless pass {} {}",
+                percent(p.and_then(|p| p.fraction)),
+                written(p.map(|p| p.bytes)),
+            ),
+            phase_a::Step::Verifying => "verifying".to_owned(),
+        });
+    });
     let material = match settled {
         phase_a::Outcome::Settled(material) => material,
         phase_a::Outcome::Cancelled => {
@@ -230,31 +232,39 @@ fn repair(path: &Path) -> bool {
         .collect();
 
     // ── Phase B ──────────────────────────────────────────────────────────
-    let Some(aim) = phase_b::aim(&material.facts, material.bytes, 0.0, None) else {
+    let Some(aim) = phase_b::aim(&material.facts, material.bytes, &Request::default()) else {
         // Already conforming AV1: nothing to win and a generation to lose.
         return deliver(path, material.path(), &output, source_bytes, &did);
     };
 
-    let outcome = phase_b::run(&ffmpeg, &material, aim, 0.0, None, &work, &cancel, |step| {
-        say(match step {
-            phase_b::Step::Encoding {
-                crf,
-                attempt,
-                progress,
-            } => format!(
-                "av1 crf {crf}{} {} {}",
-                if attempt > 1 {
-                    format!(" (encode {attempt})")
-                } else {
-                    String::new()
-                },
-                percent(progress.and_then(|p| p.fraction)),
-                written(progress.map(|p| p.bytes)),
-            ),
-            phase_b::Step::Recalibrating { from, to } => format!("crf {from} -> {to}"),
-            phase_b::Step::Verifying => "verifying".to_owned(),
-        });
-    });
+    let outcome = phase_b::run(
+        &ffmpeg,
+        &material,
+        aim,
+        &Request::default(),
+        &work,
+        &cancel,
+        |step| {
+            say(match step {
+                phase_b::Step::Encoding {
+                    crf,
+                    attempt,
+                    progress,
+                } => format!(
+                    "av1 crf {crf}{} {} {}",
+                    if attempt > 1 {
+                        format!(" (encode {attempt})")
+                    } else {
+                        String::new()
+                    },
+                    percent(progress.and_then(|p| p.fraction)),
+                    written(progress.map(|p| p.bytes)),
+                ),
+                phase_b::Step::Recalibrating { from, to } => format!("crf {from} -> {to}"),
+                phase_b::Step::Verifying => "verifying".to_owned(),
+            });
+        },
+    );
 
     match outcome {
         phase_b::Outcome::Encoded(done) => {
