@@ -27,6 +27,34 @@
 //! The FACTS still match, because they come from the same gate -- the same
 //! limits, the same numbers, in the same order.
 
+/// Declare the strings.
+///
+/// ONE declaration site, and that is the whole point of it. The list the tests
+/// below walk -- the one that holds every string to "no language is blank" and
+/// "every language interpolates the same placeholders" -- used to be a second,
+/// hand-written copy of all eighty-six names, and it had already drifted: five
+/// strings added in a single afternoon were never added to it, so both checks
+/// silently skipped them. Two of the five carry placeholders.
+///
+/// A name cannot be in one list and not the other now, because there is only
+/// one list and the other is generated from it.
+///
+/// Completeness per LANGUAGE needs no help here: `Text` has no `Default`, so a
+/// missing field is already a compile error, which is why it is a struct rather
+/// than a map.
+macro_rules! strings {
+    ($( $(#[$about:meta])* $name:ident { $($lang:ident: $line:expr),* $(,)? } )*) => {
+        $(
+            $(#[$about])*
+            pub static $name: Text = Text { $($lang: $line),* };
+        )*
+
+        /// Every string, for the tests that hold the table to its own rules.
+        /// GENERATED from the declarations above.
+        pub static EVERY_STRING: &[(&str, &Text)] = &[$((stringify!($name), &$name)),*];
+    };
+}
+
 pub mod text;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
