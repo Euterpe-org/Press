@@ -665,6 +665,46 @@ pub static BENCH_REMAINING: Text = Text {
     ru: "Нужен ещё один проход",
 };
 
+// The bench answers three questions in three bands, in this order: what just
+// happened, where things stand, what happens next. The labels are what make
+// that order legible instead of merely present -- the same information without
+// them was read as one undifferentiated block, and the answer to "what did my
+// press just do" was found last.
+
+pub static BAND_DID: Text = Text {
+    en: "Just done",
+    zh_hans: "刚才做了",
+    zh_hant: "剛才做了",
+    ja: "いま行ったこと",
+    ko: "방금 한 것",
+    de: "Gerade erledigt",
+    es: "Recién hecho",
+    fr: "Vient d'être fait",
+    hr: "Upravo učinjeno",
+    hu: "Az imént",
+    id: "Baru dilakukan",
+    nl: "Zojuist gedaan",
+    pt: "Acabou de ser feito",
+    ru: "Только что сделано",
+};
+
+pub static BAND_NEXT: Text = Text {
+    en: "Next",
+    zh_hans: "接下来会",
+    zh_hant: "接下來會",
+    ja: "このあと",
+    ko: "다음에",
+    de: "Als Nächstes",
+    es: "A continuación",
+    fr: "Ensuite",
+    hr: "Zatim",
+    hu: "Ezután",
+    id: "Berikutnya",
+    nl: "Hierna",
+    pt: "Em seguida",
+    ru: "Далее",
+};
+
 /// The headline after an encode has just produced something.
 ///
 /// Separate from [`BENCH_READY`] on purpose. The state after a successful encode
@@ -790,25 +830,6 @@ pub static FIX_SIZE: Text = Text {
     nl: "wordt gecomprimeerd tot onder {limit} MB",
     pt: "será comprimido para menos de {limit} MB",
     ru: "будет сжато до {limit} МБ",
-};
-
-/// The parameters actually used, stated plainly. There is no knob for these --
-/// Press decides -- so the least it can do is say what it decided.
-pub static RESULT_RECIPE: Text = Text {
-    en: "AV1 · quality CRF {crf} · {encodes} encode(s)",
-    zh_hans: "AV1 · 画质 CRF {crf} · 编码 {encodes} 次",
-    zh_hant: "AV1 · 畫質 CRF {crf} · 編碼 {encodes} 次",
-    ja: "AV1 · 画質 CRF {crf} · エンコード {encodes} 回",
-    ko: "AV1 · 화질 CRF {crf} · 인코딩 {encodes}회",
-    de: "AV1 · Qualität CRF {crf} · {encodes} Durchgänge",
-    es: "AV1 · calidad CRF {crf} · {encodes} codificaciones",
-    fr: "AV1 · qualité CRF {crf} · {encodes} encodages",
-    hr: "AV1 · kvaliteta CRF {crf} · {encodes} kodiranja",
-    hu: "AV1 · minőség CRF {crf} · {encodes} kódolás",
-    id: "AV1 · kualitas CRF {crf} · {encodes} kali enkode",
-    nl: "AV1 · kwaliteit CRF {crf} · {encodes} encodes",
-    pt: "AV1 · qualidade CRF {crf} · {encodes} codificações",
-    ru: "AV1 · качество CRF {crf} · кодирований: {encodes}",
 };
 
 pub static SAID_MATERIAL_WINS: Text = Text {
@@ -1123,6 +1144,8 @@ pub static EVERY_STRING: &[(&str, &Text)] = &[
     ("STEP_WRITTEN", &STEP_WRITTEN),
     ("PHASE_A_CLEAR", &PHASE_A_CLEAR),
     ("PHASE_A_CLEAR_HINT", &PHASE_A_CLEAR_HINT),
+    ("BAND_DID", &BAND_DID),
+    ("BAND_NEXT", &BAND_NEXT),
     ("BENCH_READY", &BENCH_READY),
     ("BENCH_COMPRESSED", &BENCH_COMPRESSED),
     ("BENCH_SMALLER", &BENCH_SMALLER),
@@ -1132,7 +1155,6 @@ pub static EVERY_STRING: &[(&str, &Text)] = &[
     ("DIFF_TAIL", &DIFF_TAIL),
     ("DIFF_NOTHING", &DIFF_NOTHING),
     ("FIX_SIZE", &FIX_SIZE),
-    ("RESULT_RECIPE", &RESULT_RECIPE),
     ("SAID_MATERIAL_WINS", &SAID_MATERIAL_WINS),
     ("STEP_RECALIBRATING", &STEP_RECALIBRATING),
     ("STOP", &STOP),

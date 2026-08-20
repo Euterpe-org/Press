@@ -293,12 +293,74 @@ pub fn quiet(ui: &mut egui::Ui, label: &str) -> egui::Response {
     button(ui, label, Weight::Quiet)
 }
 
+/// The one line a card is about. HERO-sized, and there is never a second one.
+///
+/// It was TITLE-sized, which is also the size of the number underneath it -- two
+/// adjacent lines at one size, so neither led. The scale has four steps and this
+/// is what the top one is for.
 pub fn heading(ui: &mut egui::Ui, text: &str, colour: Color32) {
-    ui.label(
-        egui::RichText::new(text)
-            .size(size::TITLE)
-            .strong()
-            .color(colour),
+    ui.add(
+        egui::Label::new(
+            egui::RichText::new(text)
+                .size(size::HERO)
+                .strong()
+                .color(colour),
+        )
+        .wrap(),
+    );
+}
+
+/// A before-and-after, weighted towards the after.
+///
+/// One widget rather than a row of three, so it centres; and two colours rather
+/// than one, because what the file WEIGHS NOW is the answer and what it used to
+/// weigh is the context for it.
+pub fn tally(ui: &mut egui::Ui, before: &str, after: &str) {
+    let font = egui::FontId::proportional(size::TITLE);
+    let dim = egui::TextFormat {
+        font_id: font.clone(),
+        color: INK_MUTED,
+        ..Default::default()
+    };
+    let bright = egui::TextFormat {
+        font_id: font,
+        color: INK,
+        ..Default::default()
+    };
+
+    let mut job = egui::text::LayoutJob::default();
+    job.append(before, 0.0, dim.clone());
+    job.append("  →  ", 0.0, dim);
+    job.append(after, 0.0, bright);
+    ui.add(egui::Label::new(job).wrap());
+}
+
+/// The name of a band. Small, muted and bold -- a voice of its own, so it reads
+/// as a label rather than as one more sentence in the same grey as the rest.
+pub fn label(ui: &mut egui::Ui, text: &str) {
+    ui.add(
+        egui::Label::new(
+            egui::RichText::new(text)
+                .size(size::SMALL)
+                .strong()
+                .color(INK_MUTED),
+        )
+        .wrap(),
+    );
+}
+
+/// A line of technical facts. Monospaced, because it is read by scanning for one
+/// value rather than as prose -- and because it then pairs with the path at the
+/// top of the same card instead of floating alone in a different voice.
+pub fn spec(ui: &mut egui::Ui, text: &str) {
+    ui.add(
+        egui::Label::new(
+            egui::RichText::new(text)
+                .monospace()
+                .size(size::SMALL)
+                .color(INK_MUTED),
+        )
+        .wrap(),
     );
 }
 
