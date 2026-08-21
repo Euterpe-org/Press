@@ -191,6 +191,14 @@ jobs:
       # header, and it is what the crash dialog quotes for a bug report -- so a
       # tag that disagrees with the manifest ships a release that misnames
       # itself to the one person who most needs it to be right.
+      # A pre-release suffix is allowed and everything before it is not. So
+      # `v0.2.0-rc1` and `v0.2.0` both check against a manifest reading `0.2.0`,
+      # and `v1.0.0` against it does not.
+      #
+      # Without the suffix rule this refused every release candidate, which
+      # meant the only way to find out whether any of this pipeline worked was
+      # to publish the real thing and watch. A release process with no rehearsal
+      # is one you find the bugs in from the far side.
       - name: The tag is the version
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
@@ -199,7 +207,7 @@ jobs:
           tag="${GITHUB_REF_NAME#v}"
           crate=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
           echo "tag $tag, manifest $crate"
-          test "$tag" = "$crate" || {
+          test "${tag%%-*}" = "$crate" || {
             echo "::error::tag v$tag does not match Cargo.toml's $crate — bump the manifest or move the tag"
             exit 1
           }
@@ -288,7 +296,14 @@ jobs:
           asset="euterpe-press-${GITHUB_REF_NAME}.exe"
           cp target/release/euterpe-press.exe "$asset"
           sha256sum "$asset" > "$asset.sha256"
+          # A tag carrying a suffix is a rehearsal, and must not become the
+          # thing the Releases page offers people by default.
+          case "$GITHUB_REF_NAME" in
+            *-*) pre="--prerelease" ;;
+            *)   pre="" ;;
+          esac
           gh release create "$GITHUB_REF_NAME" \
             --title "$GITHUB_REF_NAME" \
             --generate-notes \
+            $pre \
             "$asset" "$asset.sha256"
