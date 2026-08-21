@@ -18,8 +18,8 @@ fn ffmpeg_path() -> Option<PathBuf> {
     // The encoder Press would SHIP. A viewfinder that only works against the
     // developer's fuller ffmpeg is a viewfinder that fails on the product.
     match euterpe_press::encoder::resolve() {
-        Some(ffmpeg) => Some(ffmpeg.binary().to_path_buf()),
-        None => {
+        Ok(ffmpeg) => Some(ffmpeg.binary().to_path_buf()),
+        Err(_) => {
             eprintln!("skipping: no encoder embedded and none on PATH");
             None
         }

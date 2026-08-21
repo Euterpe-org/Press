@@ -1758,4 +1758,22 @@ strings! {
         pt: "O teu vídeo não foi tocado. O Press nunca escreve no ficheiro que recebeu, e tudo o que escreveu está numa pasta temporária que ele próprio limpa.",
         ru: "Ваше видео не тронуто. Press никогда не пишет в переданный файл, а всё записанное лежит во временной папке, которую он сам вычищает.",
     }
+    /// The encoder IS in the executable and could not be put on disk. Says what
+    /// the system said, because every cause is the reader's to act on.
+    ENCODER_STUCK {
+        en: "The encoder could not be unpacked, so nothing can be processed: {reason}\nAn antivirus holding the file is the usual cause.",
+        zh_hans: "编码器解不出来，所以没法处理任何文件：{reason}\n通常是杀毒软件把它拦下了。",
+        zh_hant: "編碼器解不出來，所以沒法處理任何檔案：{reason}\n通常是防毒軟體把它攔下了。",
+        ja: "エンコーダーを展開できないため、処理できません：{reason}\n多くの場合、ウイルス対策ソフトがファイルを掴んでいます。",
+        ko: "인코더를 풀어낼 수 없어 아무것도 처리할 수 없습니다: {reason}\n대개 백신이 파일을 붙잡고 있는 경우입니다.",
+        de: "Der Encoder ließ sich nicht entpacken, es kann nichts verarbeitet werden: {reason}\nMeist hält ein Virenscanner die Datei fest.",
+        es: "No se pudo descomprimir el codificador, así que no se puede procesar nada: {reason}\nLo habitual es que un antivirus retenga el archivo.",
+        fr: "L'encodeur n'a pas pu être extrait, rien ne peut être traité : {reason}\nLe plus souvent, un antivirus retient le fichier.",
+        hr: "Koder se nije mogao raspakirati, pa se ništa ne može obraditi: {reason}\nObično datoteku drži antivirusni program.",
+        hu: "A kódolót nem sikerült kicsomagolni, így semmit sem lehet feldolgozni: {reason}\nA leggyakoribb ok, hogy egy vírusirtó fogja a fájlt.",
+        id: "Enkoder tidak bisa dibongkar, jadi tidak ada yang bisa diproses: {reason}\nBiasanya antivirus yang menahan berkasnya.",
+        nl: "De encoder kon niet uitgepakt worden, dus er kan niets verwerkt worden: {reason}\nMeestal houdt een virusscanner het bestand vast.",
+        pt: "O codificador não pôde ser extraído, por isso nada pode ser processado: {reason}\nNormalmente é um antivírus a reter o ficheiro.",
+        ru: "Кодировщик не удалось распаковать, обработать ничего нельзя: {reason}\nОбычно файл удерживает антивирус.",
+    }
 }

@@ -179,7 +179,7 @@ fn repair(path: &Path) -> bool {
     // was on PATH here would let `--fix` and the button produce different files
     // from one build, which is precisely the drift that shipping our own
     // encoder exists to prevent.
-    let Some(ffmpeg) = euterpe_press::encoder::resolve() else {
+    let Ok(ffmpeg) = euterpe_press::encoder::resolve() else {
         println!("{:<40} no encoder available", name(path));
         return true;
     };

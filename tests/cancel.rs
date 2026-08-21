@@ -36,8 +36,8 @@ fn ffmpeg() -> Option<Ffmpeg> {
     // checkout. Reaching for PATH here would test a fuller ffmpeg than the one
     // charters actually get.
     match euterpe_press::encoder::resolve() {
-        Some(ffmpeg) => Some(ffmpeg),
-        None => {
+        Ok(ffmpeg) => Some(ffmpeg),
+        Err(_) => {
             eprintln!("skipping: no encoder embedded and none on PATH");
             None
         }

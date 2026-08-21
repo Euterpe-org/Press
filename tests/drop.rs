@@ -17,6 +17,7 @@ use std::sync::Arc;
 
 use eframe::egui::{self, RawInput, Rect, pos2};
 use euterpe_press::app::Press;
+use euterpe_press::encoder::Absent;
 use euterpe_press::i18n::Lang;
 
 /// The integration owns the concrete handle in real life; this is the same
@@ -73,7 +74,7 @@ fn frame(
 #[test]
 fn one_drop_loads_the_file_exactly_once() {
     let ctx = egui::Context::default();
-    let mut press = Press::new(&ctx, Lang::En, None);
+    let mut press = Press::new(&ctx, Lang::En, Err(Absent::NotCarried));
 
     let _ = frame(&ctx, &mut press, blank_input());
     assert_eq!(press.loads_so_far(), 0, "nothing dropped yet");
@@ -120,7 +121,7 @@ fn nothing_is_ever_drawn_outside_the_window() {
     // both of its options.
     for name in ["audio_pixels_over.mp4", "portrait.mp4"] {
         let ctx = egui::Context::default();
-        let mut press = Press::new(&ctx, Lang::En, None);
+        let mut press = Press::new(&ctx, Lang::En, Err(Absent::NotCarried));
 
         let mut input = sized_input(size);
         input.dropped_files.push(Arc::new(Dropped(fixture(name))));
@@ -159,7 +160,7 @@ fn nothing_is_ever_drawn_outside_the_window() {
 #[test]
 fn a_second_drop_replaces_the_first() {
     let ctx = egui::Context::default();
-    let mut press = Press::new(&ctx, Lang::En, None);
+    let mut press = Press::new(&ctx, Lang::En, Err(Absent::NotCarried));
 
     for name in ["plain_h264.mp4", "hevc.mp4"] {
         let mut input = blank_input();
@@ -178,7 +179,7 @@ fn a_second_drop_replaces_the_first() {
 #[test]
 fn dropping_the_same_file_again_reloads_it_once() {
     let ctx = egui::Context::default();
-    let mut press = Press::new(&ctx, Lang::En, None);
+    let mut press = Press::new(&ctx, Lang::En, Err(Absent::NotCarried));
 
     for _ in 0..2 {
         let mut input = blank_input();

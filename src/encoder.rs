@@ -71,25 +71,41 @@ mod embedded {
     }
 }
 
-/// The encoder this build will run, or `None` if it has none and none is on
-/// PATH either.
+/// Why there is no encoder to run.
+///
+/// TWO CAUSES, and they ask completely different things of the person reading
+/// about them. Reporting both as "this build has no encoder" told somebody whose
+/// antivirus had just quarantined the unpacked file that their download was
+/// broken -- so they downloaded it again, and again, and it was never going to
+/// be any different.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Absent {
+    /// This build carries none and none was on PATH either. Development only:
+    /// a release always carries its own.
+    NotCarried,
+    /// It IS in the executable, and it could not be put on disk. The causes are
+    /// somebody else's and all of them are actionable -- a full disk, a
+    /// read-only `TEMP`, or an antivirus that took the file between the write
+    /// and the rename, which is the ordinary fate of an unsigned tool that
+    /// extracts an executable.
+    CouldNotUnpack(String),
+}
+
+/// The encoder this build will run.
 ///
 /// Called once at startup. The window renders a plain sentence rather than
 /// failing when the button is pressed: a tool that looks ready and then cannot
 /// work is worse than one that says so on arrival.
-pub fn resolve() -> Option<Ffmpeg> {
+pub fn resolve() -> Result<Ffmpeg, Absent> {
     #[cfg(embedded_encoder)]
     {
-        match extract() {
-            Ok(path) => return Some(Ffmpeg::at(path)),
-            Err(error) => {
-                // Falling through to PATH would mean a release quietly running
-                // somebody else's encoder, which is the one thing the embedded
-                // copy exists to prevent. Say nothing was found instead.
-                eprintln!("the bundled encoder could not be unpacked: {error}");
-                return None;
-            }
-        }
+        // Never falling through to PATH. A release quietly running somebody
+        // else's encoder is the one thing carrying our own exists to prevent,
+        // and it would produce a file that differs from the server's for
+        // reasons nobody could see.
+        extract()
+            .map(Ffmpeg::at)
+            .map_err(|error| Absent::CouldNotUnpack(error.to_string()))
     }
 
     #[cfg(not(embedded_encoder))]
@@ -101,7 +117,7 @@ pub fn resolve() -> Option<Ffmpeg> {
             .stderr(std::process::Stdio::null())
             .status()
             .is_ok_and(|status| status.success());
-        usable.then(Ffmpeg::on_path)
+        usable.then(Ffmpeg::on_path).ok_or(Absent::NotCarried)
     }
 }
 

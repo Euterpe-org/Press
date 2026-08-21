@@ -71,7 +71,7 @@ fn the_coded_size_is_still_the_coded_size() {
 /// picture calls for. The result has to come back a real file.
 #[test]
 fn a_turned_source_survives_a_crop_and_an_encode() {
-    let Some(ffmpeg) = euterpe_press::encoder::resolve() else {
+    let Ok(ffmpeg) = euterpe_press::encoder::resolve() else {
         eprintln!("skipping: no encoder embedded and none on PATH");
         return;
     };

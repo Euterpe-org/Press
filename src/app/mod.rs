@@ -64,6 +64,7 @@ mod say;
 use layout::*;
 use say::*;
 
+use crate::encoder::Absent;
 use crate::ffmpeg::{Cancel, Ffmpeg};
 use crate::gate::{self, Facts, limits};
 use crate::i18n::{Lang, Text, text};
@@ -119,7 +120,11 @@ const _: () = assert!(
 
 pub struct Press {
     lang: Lang,
-    ffmpeg: Option<Ffmpeg>,
+    /// The encoder, or WHY there is none. Carried as the reason rather than as
+    /// an absence: the two causes ask completely different things of the person
+    /// reading about them, and collapsing them told somebody whose antivirus
+    /// had eaten the unpacked file that their download was broken.
+    ffmpeg: Result<Ffmpeg, Absent>,
     stage: Stage,
     /// A file chosen through the picker, waiting to be taken by the same code
     /// path a drop takes. One way in rather than two.
@@ -400,7 +405,7 @@ enum Act {
 }
 
 impl Press {
-    pub fn new(ctx: &egui::Context, lang: Lang, ffmpeg: Option<Ffmpeg>) -> Self {
+    pub fn new(ctx: &egui::Context, lang: Lang, ffmpeg: Result<Ffmpeg, Absent>) -> Self {
         fonts::install(ctx, lang);
         theme::install(ctx);
         Self {
@@ -490,7 +495,7 @@ impl Press {
         match &self.stage {
             Stage::Empty => 0.0,
             Stage::Inspect(_) => {
-                if self.ffmpeg.is_some() {
+                if self.ffmpeg.is_ok() {
                     ACTION_TALL
                 } else {
                     0.0
@@ -524,7 +529,7 @@ impl Press {
         match &self.stage {
             Stage::Empty => {}
             Stage::Inspect(_) => {
-                if self.ffmpeg.is_some() {
+                if self.ffmpeg.is_ok() {
                     ui.vertical_centered(|ui| {
                         if theme::primary(ui, text::NEXT_STEP.get(lang)).clicked() {
                             self.start_phase_a();
@@ -760,6 +765,7 @@ impl Press {
             view: self
                 .ffmpeg
                 .as_ref()
+                .ok()
                 .map(|ffmpeg| Viewfinder::open(ffmpeg, path, &facts)),
             job: Job {
                 source: path.to_path_buf(),
@@ -853,7 +859,7 @@ impl Press {
     /// Phase A: the deterministic pass. Nothing is asked of the charter here --
     /// every answer follows from the file.
     fn start_phase_a(&mut self) {
-        let (Stage::Inspect(inspect), Some(ffmpeg)) = (&self.stage, self.ffmpeg.clone()) else {
+        let (Stage::Inspect(inspect), Ok(ffmpeg)) = (&self.stage, self.ffmpeg.clone()) else {
             return;
         };
         let job = inspect.job.clone();
@@ -906,7 +912,7 @@ impl Press {
 
     /// Phase B: the fight with 80 MB. `aim` is what the bench decided it is for.
     fn start_phase_b(&mut self, aim: Aim) {
-        let Some(ffmpeg) = self.ffmpeg.clone() else {
+        let Ok(ffmpeg) = self.ffmpeg.clone() else {
             return;
         };
         // TAKEN, and put back if it was not the screen this belongs to. The old
@@ -1078,6 +1084,7 @@ impl Press {
             view: self
                 .ffmpeg
                 .as_ref()
+                .ok()
                 .map(|ffmpeg| Viewfinder::open(ffmpeg, &job.source, &job.facts)),
             job,
             at: 0.0,
@@ -1198,7 +1205,7 @@ fn drop_zone(
 impl Press {
     fn inspect(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let lang = self.lang;
-        let no_encoder = self.ffmpeg.is_none();
+        let missing = self.ffmpeg.as_ref().err().cloned();
         let Stage::Inspect(loaded) = &mut self.stage else {
             return;
         };
@@ -1219,7 +1226,7 @@ impl Press {
         });
         let mut picked = None;
         region(ui, "the readout", readout, |ui| {
-            picked = verdict_card(ui, lang, loaded, no_encoder);
+            picked = verdict_card(ui, lang, loaded, missing.as_ref());
         });
         if let Some(choice) = picked {
             loaded.job.crop = choice;
@@ -1686,7 +1693,7 @@ fn verdict_card(
     ui: &mut egui::Ui,
     lang: Lang,
     loaded: &Inspect,
-    no_encoder: bool,
+    missing: Option<&Absent>,
 ) -> Option<Option<crop::Choice>> {
     let opening = loaded.job.trim.cut_opening;
     let chose = loaded.job.crop;
@@ -1818,10 +1825,20 @@ fn verdict_card(
         // Inside the card, not floating beneath it: it is part of the verdict --
         // "and by the way nothing can be done about any of this" -- and a line
         // outside the panel was a line the column had no room reserved for.
-        if no_encoder {
+        if let Some(absent) = missing {
             ui.add_space(space::BLOCK);
+            // WHICH cause, because they ask different things of the reader. One
+            // is "this is a development build"; the other is "something on your
+            // machine is holding the file", and that one is fixable by the
+            // person reading it -- if they are told.
+            let said = match absent {
+                Absent::NotCarried => text::NO_ENCODER.get(lang).to_owned(),
+                Absent::CouldNotUnpack(why) => {
+                    text::ENCODER_STUCK.get(lang).replace("{reason}", why)
+                }
+            };
             ui.label(
-                egui::RichText::new(text::NO_ENCODER.get(lang))
+                egui::RichText::new(said)
                     .size(theme::size::SMALL)
                     .color(theme::ALARM),
             );
@@ -2008,7 +2025,7 @@ mod tests {
 
         for lang in Lang::ALL {
             let ctx = egui::Context::default();
-            let mut press = Press::new(&ctx, lang, None);
+            let mut press = Press::new(&ctx, lang, Err(Absent::NotCarried));
 
             // Empty.
             run(&mut press, &ctx, 2);

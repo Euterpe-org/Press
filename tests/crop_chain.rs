@@ -12,7 +12,7 @@ use euterpe_press::plan::{self, Encode};
 
 #[test]
 fn a_crop_survives_the_whole_chain() {
-    let Some(ffmpeg) = euterpe_press::encoder::resolve() else {
+    let Ok(ffmpeg) = euterpe_press::encoder::resolve() else {
         eprintln!("skipping: no encoder");
         return;
     };

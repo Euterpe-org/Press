@@ -20,8 +20,8 @@ use euterpe_press::{gate, phase_a, phase_b};
 
 fn ffmpeg() -> Option<Ffmpeg> {
     match euterpe_press::encoder::resolve() {
-        Some(ffmpeg) => Some(ffmpeg),
-        None => {
+        Ok(ffmpeg) => Some(ffmpeg),
+        Err(_) => {
             eprintln!("skipping: no encoder");
             None
         }

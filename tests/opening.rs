@@ -41,8 +41,8 @@ const COMPARE: u32 = 32;
 
 fn ffmpeg() -> Option<Ffmpeg> {
     match euterpe_press::encoder::resolve() {
-        Some(ffmpeg) => Some(ffmpeg),
-        None => {
+        Ok(ffmpeg) => Some(ffmpeg),
+        Err(_) => {
             eprintln!("skipping: no encoder embedded and none on PATH");
             None
         }
