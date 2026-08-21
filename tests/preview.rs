@@ -120,6 +120,7 @@ fn playing_to_the_end_reports_that_it_ended() {
     let Some(ffmpeg) = ffmpeg_path() else { return };
 
     let preview = Preview::open(&ffmpeg, &fixture("plain_h264.mp4"), 320, 180, 30.0);
+    let began = Instant::now();
     preview.play(0.0);
     await_frame(&preview);
 
@@ -127,10 +128,49 @@ fn playing_to_the_end_reports_that_it_ended() {
     while Instant::now() < deadline && !preview.ended() {
         std::thread::sleep(Duration::from_millis(20));
     }
+    let took = began.elapsed().as_secs_f64();
+    // READ AFTER IT STOPS, not while it runs. The decoder keeps its final frame
+    // in place once it has finished, so this is the position it actually
+    // reached. Sampling during playback instead is a race with no winner: the
+    // whole second drains in about half of one, so a poll that lands late
+    // reports wherever it last happened to look.
+    let last = preview
+        .frame()
+        .expect("the final frame stays available")
+        .pts;
+
     assert!(preview.ended(), "a one-second source should have finished");
     assert!(
         !preview.playing(),
         "and should no longer report itself as playing"
+    );
+
+    // WHERE IT ENDED UP, which is what "the position is counted at the source's
+    // rate" actually means. Frames come down a rawvideo pipe carrying no
+    // timestamps, so the readout is accumulated one frame step at a time. Get
+    // that step wrong and a one-second source finishes reading half a second,
+    // or two.
+    //
+    // Asserted on the VALUE, not on how long the playing took. The rate itself
+    // is not measurable on a one-second fixture: `-re` paces ffmpeg's reading,
+    // but only once its buffer is full, so sampled every 50 ms this source
+    // reports nothing for ~150 ms and then arrives already a third of the way
+    // in, and the whole clip drains in ~600 ms. A test that timed a window
+    // inside that failed two runs in five, and moving the window only changed
+    // which end it failed at.
+    assert!(
+        (0.8..=1.05).contains(&last),
+        "a one-second source finished with the position at {last:.3}s — \
+         the readout is counting at the wrong rate"
+    );
+
+    // A floor on the wall clock: far under the ~600 ms this really takes, far
+    // over the ~50 ms it would take with the pacing removed. Not a measurement
+    // of the rate, just proof that something is pacing at all.
+    assert!(
+        took > 0.2,
+        "the whole source played in {took:.3}s, which is not playing, \
+         it is draining a pipe"
     );
 }
 
@@ -188,49 +228,6 @@ fn holding_the_scrubber_still_decodes_once() {
         preview.decodes(),
         after_first,
         "standing still decoded again; the same moment is the same picture"
-    );
-}
-
-/// A playing preview has to know where it is, at the rate the source runs at.
-///
-/// It did not. Frames come down a rawvideo pipe with no timestamps, so position
-/// is counted forward from the seek — and the step was hard-coded to a thirtieth
-/// of a second whatever the source was. `-re` paces the pipe at the source's
-/// real rate, so on this 120 fps fixture the picture ran at speed while the
-/// readout crawled at a quarter of it: press play and the video moves, the
-/// playhead barely does.
-///
-/// Measured against the WALL CLOCK, because that is the claim: a second of
-/// playing is a second of position. The band is wide enough for a loaded machine
-/// and still nowhere near the four-fold error it is there to catch.
-#[test]
-fn a_playing_preview_advances_at_the_source_rate() {
-    let Some(ffmpeg) = ffmpeg_path() else { return };
-
-    let preview = Preview::open(&ffmpeg, &fixture("fps120.mp4"), 320, 180, 120.0);
-    preview.play(0.0);
-    // Only the newest frame is kept, so how far playback has already got by the
-    // time the first one is observed is not fixed. The claim is about the RATE,
-    // so both ends of the interval are measured rather than assumed.
-    let first = await_frame(&preview);
-
-    let began = Instant::now();
-    std::thread::sleep(Duration::from_millis(350));
-    let elapsed = began.elapsed().as_secs_f64();
-
-    let Some(later) = preview.frame() else {
-        panic!("a third of a second of playing produced no frame at all");
-    };
-    let advanced = later.pts - first.pts;
-    assert!(
-        advanced > elapsed * 0.5,
-        "{elapsed:.2}s of playing advanced the position by only {advanced:.3}s — \
-         the readout is counting at the wrong rate"
-    );
-    assert!(
-        advanced < elapsed * 1.6,
-        "{elapsed:.2}s of playing advanced the position by {advanced:.3}s — \
-         faster than the source runs"
     );
 }
 

@@ -3,6 +3,7 @@ name = "euterpe-press"
 version = "0.2.0"
 edition = "2024"
 description = "Turns a background video into one euterpe-org.com will accept"
+license = "GPL-3.0-or-later"
 publish = false
 
 # Size over speed, deliberately: this ships as ONE file that a charter

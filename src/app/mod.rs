@@ -1967,7 +1967,7 @@ mod tests {
         painted
     }
 
-    const LONG: &str = "D:\\User\\Videos\\Others\\少女舞乐哭Live-最终版-导出-4k-2026.mp4";
+    const LONG: &str = "D:\\视频素材\\背景导出\\谱面背景-最终版-重新导出-4k60-2026.mp4";
 
     fn facts_of(codec: &'static str, w: u32, h: u32, fps: f64) -> Facts {
         Facts {
