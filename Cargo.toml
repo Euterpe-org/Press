@@ -19,7 +19,7 @@ codegen-units = 1
 strip = true
 
 [dependencies]
-eframe = "0.36.1"
+eframe = { version = "0.36.1", default-features = false, features = ["glow", "default_fonts", "accesskit"] }
 flate2 = { version = "1.1.9", default-features = false, features = ["rust_backend"] }
 rfd = "0.17.2"
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Globalization", "Win32_Security", "Win32_System_Threading"] }
