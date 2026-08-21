@@ -10,10 +10,27 @@ file that fixes it in as long as an encode takes.
 
 ## Get it
 
-[**Releases**](../../releases) — one `.exe`, nothing to install, no runtime to
-put on the machine first. The encoder is inside it. A `.sha256` sits beside each
-download because the executable is unsigned and you should be able to check you
-got what CI built.
+[**Releases**](../../releases) — one `.exe`, nothing to install. A `.sha256`
+sits beside each download because the executable is unsigned and you should be
+able to check you got what CI built.
+
+**No runtime.** The C runtime is linked statically, so there is no
+`VCRUNTIME140.dll` import and no Visual C++ Redistributable to install first;
+every remaining import is a DLL that ships with Windows. The encoder is inside
+the exe too. Windows 10 or later, x64.
+
+**Nothing lands in the working directory.** Ever — not a config file, not a
+temp file, not a log. Press writes in exactly three places:
+
+| | | |
+|---|---|---|
+| the result | where you choose in the save dialog, or `{source}.press.mp4` beside the input for `--fix` | |
+| intermediates | `%TEMP%\Euterpe.Press\work-*` | deleted when the run ends; swept after 24 h if it was killed |
+| the encoder | `%LOCALAPPDATA%\Euterpe.Press\ffmpeg-{hash}.exe` | a cache, reused; superseded ones are removed |
+
+It reads no registry, writes no registry, opens no socket — there is no
+networking code and no dependency that could open one — and asks for no
+elevation. Deleting the exe and those two folders removes it completely.
 
 ## The rule it enforces is not its own
 
@@ -123,7 +140,7 @@ would let one back-fill downgrade every install.
 ## One file, encoder included
 
 A release carries its own ffmpeg, gzipped into the executable and unpacked on
-first use to `%TEMP%\Euterpe.Press\ffmpeg-{stamp}.exe`. The name is the content's
+first use to `%LOCALAPPDATA%\Euterpe.Press\ffmpeg-{stamp}.exe`. The name is the content's
 own hash — the doctrine Euterpe.Mod already uses for its embedded natives — so a
 new build cannot collide with an older instance's still-locked file, and a stale
 build of the same length cannot stand in for this one.

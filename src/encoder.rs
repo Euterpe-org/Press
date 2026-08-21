@@ -15,13 +15,53 @@
 //! The length check on an existing file guards only a truncated write from a
 //! crashed extraction. It is not an integrity check and does not pretend to be.
 //!
+//! # It is a CACHE, and it lives where caches live
+//!
+//! `%LOCALAPPDATA%\Euterpe.Press\`, not `%TEMP%`. The distinction is not
+//! bookkeeping. `%TEMP%` means "deletable at any moment", and Windows means it:
+//! Storage Sense and Disk Cleanup both target it on a schedule nobody sets. This
+//! file is the opposite of that -- named by its own content, written once,
+//! reused by every run for the life of the build, and worth keeping precisely
+//! because unpacking it again costs the charter a wait they already paid for.
+//!
+//! It also stops Press matching the shape of a dropper. Unpacking an executable
+//! into `%TEMP%` and running it is the single most heavily weighted pattern in
+//! most heuristic scanners, and Press has to do the unpacking-and-running part
+//! by design. Doing it in the folder Windows documents for cached program data
+//! is both correct and one fewer reason to be stopped.
+//!
+//! The intermediates a RUN produces are genuinely temporary and stay in
+//! `%TEMP%`, under [`crate::workspace`]. Two kinds of file, two lifetimes, two
+//! directories, each named in exactly one place.
+//!
 //! **A build with no embedded encoder falls back to PATH.** That is for
 //! development, and it is a compile-time branch rather than a runtime one: a
 //! shipped Press always has its own, because a machine's stray ffmpeg changing
 //! what Press produces is exactly the drift that using the server's recipe
 //! exists to prevent.
 
+use std::path::PathBuf;
+
 use crate::ffmpeg::Ffmpeg;
+
+/// Where the unpacked encoder is kept.
+///
+/// `%LOCALAPPDATA%\Euterpe.Press\` -- the folder Windows documents for per-user,
+/// per-machine data that is not worth roaming and not safe to lose, which is
+/// exactly what a content-addressed cache of an executable is.
+///
+/// Read from the environment rather than through `SHGetKnownFolderPath`. The
+/// variable is set by the session for every process Windows starts, and reaching
+/// for the shell API would mean another `windows-sys` feature and a COM-flavoured
+/// call to learn something already on hand. If it is somehow absent, the temp
+/// directory is a worse home but a working one, and losing a cache is not worth
+/// refusing to run over.
+pub fn cache_dir() -> PathBuf {
+    std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join("Euterpe.Press")
+}
 
 #[cfg(embedded_encoder)]
 mod embedded {
@@ -123,7 +163,7 @@ pub fn resolve() -> Result<Ffmpeg, Absent> {
 
 #[cfg(embedded_encoder)]
 fn extract() -> std::io::Result<std::path::PathBuf> {
-    let dir = crate::workspace::root();
+    let dir = cache_dir();
     std::fs::create_dir_all(&dir)?;
     let path = dir.join(format!("ffmpeg-{}.exe", embedded::STAMP));
 
@@ -165,13 +205,23 @@ mod tests {
         let _ = super::resolve();
     }
 
+    /// Named, so a person browsing what this program left on their disk can tell
+    /// what it is -- and kept OUT of the scratch directory, because the two hold
+    /// different kinds of file with different lifetimes and Windows deletes one
+    /// of them on a schedule nobody sets.
     #[test]
-    fn the_cache_directory_is_named_after_this_program() {
-        let dir = crate::workspace::root();
+    fn the_cache_lives_apart_from_the_scratch_and_says_whose_it_is() {
+        let cache = super::cache_dir();
         assert!(
-            dir.ends_with("Euterpe.Press"),
+            cache.ends_with("Euterpe.Press"),
             "a person should be able to tell what put this here: {}",
-            dir.display()
+            cache.display()
+        );
+        assert_ne!(
+            cache,
+            crate::workspace::root(),
+            "the encoder is a cache and the workspaces are scratch; \
+             sharing a directory puts the cache somewhere Windows empties"
         );
     }
 }

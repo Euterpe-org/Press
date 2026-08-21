@@ -1,0 +1,21 @@
+# The C runtime goes INSIDE the executable.
+#
+# Rust links the MSVC CRT dynamically by default, which leaves an import on
+# `VCRUNTIME140.dll`. That file is the Visual C++ Redistributable. It is on most
+# developer machines and on a great many ordinary ones, because something else
+# installed it, and it is NOT part of Windows. A clean install does not have it.
+#
+# What that looks like to the person it happens to is the worst failure this
+# program could have: a dialog from the loader, before `main`, saying a DLL is
+# missing, on a tool whose entire pitch is "one file, nothing to install". They
+# cannot read anything Press wrote, because Press never ran.
+#
+# `+crt-static` puts the CRT in the binary. Everything else the exe imports is
+# already part of Windows: the `api-ms-win-crt-*` set is the UCRT, which has
+# shipped in Windows since 10, and the rest is kernel32/user32/gdi32/opengl32
+# and their neighbours.
+#
+# It costs a few hundred kilobytes, against a binary that is mostly a compressed
+# video encoder anyway.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
