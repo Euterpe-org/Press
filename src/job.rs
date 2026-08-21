@@ -78,3 +78,61 @@ impl Request {
         self.opening_cut <= 0.0 && self.crop.is_none()
     }
 }
+
+/// What to call the file Press produces from `source`.
+///
+/// ONE scheme, and it lives here because there are two callers in two different
+/// crates: the window opens its save dialog with it, and `--fix` writes it
+/// directly. Those were separate lines, and they had already disagreed -- the
+/// terminal preserved the charter's name and the window offered `video.mp4`,
+/// left over from when Press wrote that beside the source without asking.
+///
+/// Against a folder of `動感光波.mp4` and `小孤独背景.mp4` a fixed name throws
+/// away the one piece of identity the file has, and the charter types it back by
+/// hand. `.press` before the extension keeps it, and cannot collide with the
+/// source -- so overwriting the original stays something they have to go out of
+/// their way to do.
+pub fn result_name(source: &std::path::Path) -> String {
+    let stem = source.file_stem().unwrap_or(source.as_os_str());
+    format!("{}.press.mp4", stem.to_string_lossy())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    #[test]
+    fn the_result_is_named_after_what_it_came_from() {
+        for (source, want) in [
+            ("D:\\v\\動感光波.mp4", "動感光波.press.mp4"),
+            ("D:\\v\\clip.MP4", "clip.press.mp4"),
+            // Dots in the name are ordinary in an export. Only the LAST one is
+            // the extension, and everything before it is the charter's.
+            (
+                "D:\\v\\少女舞乐哭Live-最终版-导出-4k-2026.mp4",
+                "少女舞乐哭Live-最终版-导出-4k-2026.press.mp4",
+            ),
+        ] {
+            assert_eq!(super::result_name(Path::new(source)), want, "for {source}");
+        }
+    }
+
+    /// It can never be the source. That is what keeps "save" from being a way to
+    /// destroy the original by pressing return.
+    #[test]
+    fn the_suggestion_never_points_at_the_source() {
+        for source in [
+            "D:\\v\\動感光波.mp4",
+            "D:\\v\\動感光波.press.mp4",
+            "D:\\v\\press.mp4",
+        ] {
+            let source = Path::new(source);
+            assert_ne!(
+                super::result_name(source),
+                source.file_name().unwrap_or_default().to_string_lossy(),
+                "for {}",
+                source.display()
+            );
+        }
+    }
+}

@@ -1036,7 +1036,7 @@ impl Press {
         let Some(to) = rfd::FileDialog::new()
             .set_title(text::SAVE_TITLE.get(self.lang))
             .set_directory(bench.job.source.parent().unwrap_or(Path::new(".")))
-            .set_file_name("video.mp4")
+            .set_file_name(crate::job::result_name(&bench.job.source))
             .add_filter("MP4", &["mp4"])
             .save_file()
         else {

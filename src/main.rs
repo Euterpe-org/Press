@@ -156,10 +156,7 @@ fn repair(path: &Path) -> bool {
     // to put it; nothing here can ask, so nothing here overwrites -- a batch
     // that eats its own earlier output is worse than one that stops and says
     // the name is taken.
-    let stem = path.file_stem().unwrap_or(path.as_os_str());
-    let mut name_out = stem.to_os_string();
-    name_out.push(".press.mp4");
-    let output = path.with_file_name(name_out);
+    let output = path.with_file_name(euterpe_press::job::result_name(path));
 
     if output == path {
         println!("{:<40} refusing to overwrite the source", name(path));
