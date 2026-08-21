@@ -133,9 +133,7 @@ const MOST_ATTEMPTS: usize = 6;
 /// if so there is somewhere to fall back to.
 ///
 /// No variant carries a size, because every one of them wants the same one:
-/// the weight of what went in, which [`run`] already holds. That used to be a
-/// payload on two variants and absent from the third, and the third is where a
-/// 2.6 MB video came back at 3.2 MB.
+/// the weight of what went in, which [`run`] already holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Aim {
     /// Over the limit. The encode is the fix, there is no falling back to what
@@ -147,10 +145,8 @@ pub enum Aim {
     /// something has to ship -- but there is no allowance to spend, because the
     /// file was never anywhere near it.
     ///
-    /// This is the variant the taxonomy used to be missing. Folding it into
-    /// [`Aim::Rescue`] handed a 2.6 MB 120 fps video the full 80 MB as a budget,
-    /// which bought CRF 20 and returned 3.2 MB -- heavier than the source, for a
-    /// fault that a house-standard encode fixes at a third of the weight.
+    /// The variant the taxonomy used to be missing, and the module docs open on
+    /// what folding it into [`Aim::Rescue`] cost.
     Repair,
     /// Deliverable, and the charter asked for a change anyway -- a crop, an
     /// opening cut. House standard, and the one thing that separates it from
@@ -174,17 +170,6 @@ impl Aim {
     /// stay under. True only where the file was actually over it.
     fn spends_the_allowance(self) -> bool {
         matches!(self, Self::Rescue)
-    }
-
-    /// Whether there is a file to fall back to when no encode fits.
-    ///
-    /// This is what decides how hard the "no heavier than what went in" line
-    /// is. With a fallback it is absolute and enforced in flight -- an encode
-    /// past it is worthless, so it is killed where it stands. Without one it is
-    /// where Press aims and no more, because a result over the line still beats
-    /// no result at all.
-    fn has_a_fallback(self) -> bool {
-        matches!(self, Self::Apply | Self::Beat)
     }
 }
 
@@ -345,11 +330,9 @@ pub fn pending(facts: &Facts, bytes: u64, asked: &Request) -> Vec<Pending> {
 /// already AV1. Re-encoding AV1 to AV1 was measured at ~190% of the original for
 /// no visible gain, so there is nothing to win and a generation to lose.
 pub fn aim(facts: &Facts, bytes: u64, asked: &Request) -> Option<Aim> {
-    // SIZE FIRST, and on its own. This is the one question that turns the
-    // allowance into a budget, and asking it as "does the gate pass" folded a
-    // 2.6 MB video with the wrong frame rate in with a 400 MB one -- then
-    // handed the small one 80 MB to spend and got back a heavier file than it
-    // started with.
+    // SIZE FIRST, and on its own. It is the only question that turns the
+    // allowance into a budget; asking it as "does the gate pass" folds a small
+    // file with the wrong frame rate in with a 400 MB one.
     if bytes > limits::MAX_BYTES {
         return Some(Aim::Rescue);
     }
@@ -457,22 +440,18 @@ pub fn run(
     let lighter = material.bytes.min(limits::MAX_BYTES);
 
     // `ceiling` is what an encode is killed for crossing; `want` is where Press
-    // tries to land. They differ for exactly one aim, and that difference is
-    // what `has_a_fallback` is for.
-    let (ceiling, want) = if aim.spends_the_allowance() {
-        (
-            limits::MAX_BYTES,
-            (limits::MAX_BYTES as f64 * AIM_UNDER) as u64,
-        )
-    } else if aim.has_a_fallback() {
-        (lighter, (lighter as f64 * AIM_UNDER) as u64)
-    } else {
-        // A repair has nowhere to go if it produces nothing, so the hard line
-        // is the gate's and `lighter` is only where it aims. A result over that
-        // line is kept while a coarser one is tried, and ships if the search
-        // runs out -- an fps that no longer breaks the upload, at a few percent
-        // more weight, beats a file that still does.
-        (limits::MAX_BYTES, (lighter as f64 * AIM_UNDER) as u64)
+    // tries to land. A table, so it reads as one:
+    //
+    //   Rescue  the gate's, spent as a budget    nothing to fall back to
+    //   Repair  the gate's, aimed at `lighter`   nothing to fall back to, so a
+    //                                            result over the aim is kept
+    //   Apply   `lighter`, and it is absolute    the material is a good file, so
+    //   Beat    likewise                         anything heavier is worthless
+    let under = |bytes: u64| (bytes as f64 * AIM_UNDER) as u64;
+    let (ceiling, want) = match aim {
+        Aim::Rescue => (limits::MAX_BYTES, under(limits::MAX_BYTES)),
+        Aim::Repair => (limits::MAX_BYTES, under(lighter)),
+        Aim::Apply | Aim::Beat => (lighter, under(lighter)),
     };
 
     let input = material.path().to_string_lossy().into_owned();
@@ -480,9 +459,6 @@ pub fn run(
     let mut measured: Vec<(u32, u64)> = Vec::new();
     let mut best: Option<Encoded> = None;
     let mut smallest_over: Option<u64> = None;
-    // The weight of an encode that was allowed to finish and then lost to the
-    // material. Stays `None` where every attempt was killed on the way up.
-    let av1_was: Option<u64> = None;
     let mut encodes = 0usize;
     let mut attempts = 0usize;
     // The projection is allowed to restart the search once. After that there is
@@ -752,7 +728,10 @@ pub fn run(
         // No quality carried the request out without the file gaining weight.
         // The material is a perfectly good upload; it is the request that goes.
         (Aim::Apply, Some(_)) => finish(best, Outcome::RequestDropped),
-        _ => finish(best, Outcome::MaterialWins { av1_was }),
+        // AV1 was tried and lost. Reaching HERE rather than the early return
+        // above means it was killed on its way past the material's weight, so
+        // there is no measurement to quote and none is invented.
+        _ => finish(best, Outcome::MaterialWins { av1_was: None }),
     }
 }
 

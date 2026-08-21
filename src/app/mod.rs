@@ -305,14 +305,6 @@ impl Said {
             Self::MaterialWins { .. } | Self::RequestDropped | Self::StillTooLarge { .. }
         )
     }
-
-    /// Whether there is anything left for the charter to do here.
-    ///
-    /// Only length can rescue a file that will not fit, and only the scrubber
-    /// can shorten it.
-    fn only_a_shorter_video_helps(&self) -> bool {
-        matches!(self, Self::StillTooLarge { .. })
-    }
 }
 
 impl Bench {
@@ -562,10 +554,9 @@ impl Press {
                 let ready = !bench.blocked();
                 let has_work = !bench.pending().is_empty();
                 let runnable = bench.worth_running();
-                let shorter_only = bench
-                    .said
-                    .as_ref()
-                    .is_some_and(Said::only_a_shorter_video_helps);
+                // The card says to trim it shorter; without this there is
+                // nowhere to do that but drag the file in again.
+                let shorter_only = matches!(bench.said, Some(Said::StillTooLarge { .. }));
                 let saved = bench.saved.clone();
                 let mut pressed = None;
 
