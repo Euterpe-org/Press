@@ -172,6 +172,20 @@ jobs:
           name: encoder
           path: vendor
 
+      # `cargo:rerun-if-changed` is decided on MTIME, and a downloaded or copied
+      # file keeps whatever mtime it arrived with. If that predates the last
+      # build-script run -- which a restored `target/` cache makes entirely
+      # possible -- cargo concludes nothing changed, skips the build script, and
+      # produces a Press with no encoder inside it. The build stays green. The
+      # release is useless.
+      #
+      # Reproduced locally: copying a real ffmpeg into vendor/ with its original
+      # timestamp built a 10 MB binary instead of a 98 MB one, silently. One
+      # `touch` removes the whole class.
+      - name: Make the encoder newer than any cached fingerprint
+        shell: bash
+        run: touch vendor/ffmpeg.exe
+
       # BEFORE anything is built, because the answer decides whether the build
       # is worth having. The binary reports `CARGO_PKG_VERSION` -- it is in the
       # header, and it is what the crash dialog quotes for a bug report -- so a
@@ -214,6 +228,26 @@ jobs:
             echo "### Press: $(du -h target/release/euterpe-press.exe | cut -f1)"
             echo "(one file, encoder included)"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # THE ENCODER IS ACTUALLY INSIDE IT.
+      #
+      # The step above only proves the build script ran. This proves the result:
+      # PATH is stripped to System32, so nothing on the runner can stand in for
+      # the encoder that is supposed to be in the binary. If it is not there,
+      # `resolve` finds nothing, `--fix` refuses, and this goes red -- before
+      # anything is published.
+      #
+      # Asserted on the ARTIFACT rather than on the build, because "the build
+      # script was skipped" is only one of the ways this can be wrong and the
+      # others have not been thought of yet.
+      - name: The encoder is inside the binary
+        shell: bash
+        run: |
+          set -eux
+          work=$(mktemp -d)
+          cp tests/fixtures/fps120.mp4 "$work/"
+          PATH="/c/Windows/System32" ./target/release/euterpe-press.exe --fix "$work/fps120.mp4"
+          test -s "$work/fps120.press.mp4"
 
       # Proof the shipped binary agrees with the server, run on the artifact
       # itself rather than only in the test harness.

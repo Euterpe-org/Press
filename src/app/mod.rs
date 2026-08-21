@@ -2011,6 +2011,71 @@ mod tests {
         }
     }
 
+    /// The layout is the same shape at every display scale.
+    ///
+    /// Press declares per-monitor v2 DPI awareness, which is what keeps a fixed
+    /// 960x640 canvas of video sharp instead of letting Windows bitmap-stretch
+    /// it. The cost of asking is that Press is handed the real scale factor and
+    /// has to be correct at it -- and `region`'s fit assertion is a
+    /// `debug_assert`, compiled out of the shipped build, so an overflow at 150%
+    /// would clip in silence on the one screen nobody here is looking at.
+    ///
+    /// WHAT THIS ESTABLISHES, precisely: that the layout is scale-INVARIANT.
+    /// egui lays out in points, so the canvas is 960x640 whatever the device
+    /// does, and the measurement below is identical at 1.0 and at 2.0. It passes
+    /// at absurd scales too, which is the correct result rather than a weak one.
+    ///
+    /// So it will not catch a bad layout -- `every_stage_fits_the_window` does
+    /// that. It catches the day something starts reading `pixels_per_point` and
+    /// the invariant this manifest setting rests on quietly stops holding.
+    ///
+    /// The scales are the ones Windows actually offers.
+    #[test]
+    fn the_layout_survives_every_display_scale() {
+        for scale in [1.0_f32, 1.25, 1.5, 1.75, 2.0] {
+            for lang in [Lang::En, Lang::ZhHans, Lang::De] {
+                let ctx = egui::Context::default();
+                ctx.set_pixels_per_point(scale);
+                let mut press = Press::new(&ctx, lang, Err(Absent::NotCarried));
+
+                // The tallest card there is: every problem at once, on the
+                // longest-worded language, which is what decides whether the
+                // readout column still holds its contents.
+                press.stage = Stage::Bench(Box::new(Bench {
+                    job: Job {
+                        facts: facts_of("vp09", 3840, 2160, 120.0),
+                        ..a_job()
+                    },
+                    material: Box::new(Material::for_test(
+                        PathBuf::from(LONG),
+                        396_000_000,
+                        facts_of("vp09", 3840, 2160, 120.0),
+                        vec![Applied::AudioDropped],
+                    )),
+                    ..a_bench(vec![], None, None)
+                }));
+                let painted = run(&mut press, &ctx, 3);
+
+                // Proof this is not theatre: if egui ignored the request, every
+                // scale below would be laying out at 1.0 and passing for it.
+                assert_eq!(
+                    ctx.pixels_per_point(),
+                    scale,
+                    "the context did not take the scale"
+                );
+
+                let screen =
+                    egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::Vec2::from(WINDOW));
+                assert!(painted.is_positive(), "nothing painted at {scale}x");
+                assert!(
+                    screen.contains_rect(painted.shrink(0.5)),
+                    "at {scale}x in {}, painted {painted:?} outside {screen:?}",
+                    lang.endonym()
+                );
+            }
+        }
+    }
+
     /// Every screen, in every language, laid out on the one canvas there is.
     ///
     /// The debug assertion inside `region` is what does the judging; this only
