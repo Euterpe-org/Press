@@ -17,6 +17,9 @@ env:
   # comes out lives in this file, so the key is a hash of the file itself.
   FFMPEG_VERSION: "8.1.2"
   SVTAV1_VERSION: "v3.1.2"
+  # The commit `v3.1.2` points at, checked after the clone. A tag can be moved
+  # and a mirror can diverge; a hash can do neither.
+  SVTAV1_COMMIT: "b33dcc56cc64fcb3b3569094af8ab1d0d81ab4c1"
 
 jobs:
   encoder:
@@ -62,11 +65,24 @@ jobs:
       # viewfinder, where ffmpeg's own decoder is quick enough, and leaving it
       # out removes a meson toolchain and several megabytes for no benefit the
       # charter would ever see.
+      # Cloned from AOMediaCodec's own GitHub mirror rather than from the
+      # canonical GitLab, which answers this runner with HTTP 403 -- it is what
+      # failed the very first release rehearsal, at the first line of the first
+      # job, on a dependency nobody here controls.
+      #
+      # A mirror is a trust decision, so it is not trusted: the checkout is held
+      # to the COMMIT the pinned tag stands for, and a mirror that ever diverged
+      # would stop the build rather than quietly build something else.
       - name: Build SVT-AV1
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
           set -eux
-          git clone --depth 1 --branch "$SVTAV1_VERSION" https://gitlab.com/AOMediaCodec/SVT-AV1.git /tmp/svt
+          git clone --depth 1 --branch "$SVTAV1_VERSION" https://github.com/AOMediaCodec/SVT-AV1.git /tmp/svt
+          got=$(git -C /tmp/svt rev-parse HEAD)
+          test "$got" = "$SVTAV1_COMMIT" || {
+            echo "::error::SVT-AV1 $SVTAV1_VERSION is $got here, expected $SVTAV1_COMMIT"
+            exit 1
+          }
           cmake -S /tmp/svt -B /tmp/svt/build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX=/tmp/prefix \
