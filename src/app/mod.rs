@@ -439,6 +439,19 @@ impl Press {
 /// place a version number exists.
 pub const VERSION: &str = concat!("v", env!("CARGO_PKG_VERSION"));
 
+/// What the title bar says.
+///
+/// The version belongs HERE rather than inside the window. It is never what
+/// anybody came for, but it is the first thing asked for when a charter reports
+/// that something misbehaved -- and the title bar is the one part of a window
+/// that survives being screenshotted, cropped, described over a phone call, or
+/// read off a taskbar preview. It used to sit in the header instead, in small
+/// grey text beside the language picker, competing for the one row that is
+/// about the file.
+pub fn window_title(lang: Lang) -> String {
+    format!("{} {VERSION}", text::WINDOW_TITLE.get(lang))
+}
+
 /// The header's height: the tallest thing in it, which is the language button.
 /// `button_padding.y` twice plus a line of body text, plus its stroke. Measured
 /// rather than guessed -- 34 was the guess, and the debug assertion in `region`
@@ -698,17 +711,15 @@ impl Press {
                                 && lang != current
                             {
                                 self.lang = lang;
+                                // The title bar carries the version, and the
+                                // system will not re-read it on its own.
+                                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Title(
+                                    window_title(lang),
+                                ));
                                 fonts::install(ui.ctx(), lang);
                             }
                         }
                     });
-
-                // The version, beside the only other thing in the header that is
-                // about Press rather than about the file. Small and muted: it is
-                // never what anyone came here for, but it is the first thing
-                // asked for when a charter reports that something misbehaved.
-                ui.add_space(space::ROW);
-                theme::muted(ui, VERSION);
             });
         });
     }

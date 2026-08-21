@@ -92,12 +92,12 @@ fn window(open: Option<PathBuf>) -> eframe::Result {
             .with_resizable(false)
             .with_maximize_button(false)
             .with_drag_and_drop(true)
-            .with_title(text::WINDOW_TITLE.get(lang)),
+            .with_title(euterpe_press::app::window_title(lang)),
         ..Default::default()
     };
 
     eframe::run_native(
-        text::WINDOW_TITLE.get(lang),
+        &euterpe_press::app::window_title(lang),
         options,
         Box::new(move |cc| {
             let mut press = Press::new(&cc.egui_ctx, lang, ffmpeg);
