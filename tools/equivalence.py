@@ -97,7 +97,8 @@ def main() -> int:
         shutil.copy(FIXTURES / fixture, source)
         subprocess.run([str(press), "--fix", str(source)], check=False)
 
-        ours = own / "video.mp4"
+        # Named after the source by `job::result_name`, not a fixed name.
+        ours = own / f"{source.stem}.press.mp4"
         theirs = server_out / f"{cid}.mp4"
         rows.append((fixture, ours, theirs))
 

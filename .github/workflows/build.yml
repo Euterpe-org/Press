@@ -328,7 +328,10 @@ jobs:
           ./target/release/euterpe-press.exe --check tests/fixtures/plain_h264.mp4
           ./target/release/euterpe-press.exe --check tests/fixtures/audio_h264.mp4 && exit 1 || true
           ./target/release/euterpe-press.exe --fix "$work/audio_h264.mp4"
-          ./target/release/euterpe-press.exe --check "$work/video.mp4"
+          # `--fix` names its result after the source, so this name is coupled to
+          # `job::result_name`. It was `video.mp4` until that changed, and this
+          # step is where the rehearsal noticed.
+          ./target/release/euterpe-press.exe --check "$work/audio_h264.press.mp4"
 
       - uses: actions/upload-artifact@v4
         with:
