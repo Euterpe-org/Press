@@ -156,6 +156,10 @@ jobs:
     name: press
     needs: encoder
     runs-on: windows-latest
+    # Only what the release step needs, and only that. The default token is
+    # read-only on this repository; creating a release needs to write one.
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -167,6 +171,24 @@ jobs:
         with:
           name: encoder
           path: vendor
+
+      # BEFORE anything is built, because the answer decides whether the build
+      # is worth having. The binary reports `CARGO_PKG_VERSION` -- it is in the
+      # header, and it is what the crash dialog quotes for a bug report -- so a
+      # tag that disagrees with the manifest ships a release that misnames
+      # itself to the one person who most needs it to be right.
+      - name: The tag is the version
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          set -eu
+          tag="${GITHUB_REF_NAME#v}"
+          crate=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
+          echo "tag $tag, manifest $crate"
+          test "$tag" = "$crate" || {
+            echo "::error::tag v$tag does not match Cargo.toml's $crate — bump the manifest or move the tag"
+            exit 1
+          }
 
       - name: Format
         run: cargo fmt --check
@@ -211,3 +233,28 @@ jobs:
           name: euterpe-press
           path: target/release/euterpe-press.exe
           retention-days: 30
+
+      # THE ONE STEP THAT MAKES A TAG MEAN SOMETHING. Everything above produces
+      # a workflow artifact, which expires in thirty days and cannot be fetched
+      # without a GitHub account -- so a charter sent "go and download Press"
+      # would find a login wall and, a month later, nothing at all.
+      #
+      # Named with its version, because a downloads folder ends up holding three
+      # of these and `euterpe-press.exe (2)` tells nobody which one they are
+      # running. The checksum is beside it: this is an unsigned executable that
+      # people are being asked to download and run, and the least it can do is
+      # let them check they got what CI built.
+      - name: Publish the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eux
+          asset="euterpe-press-${GITHUB_REF_NAME}.exe"
+          cp target/release/euterpe-press.exe "$asset"
+          sha256sum "$asset" > "$asset.sha256"
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            "$asset" "$asset.sha256"
