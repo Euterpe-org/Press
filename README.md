@@ -5,7 +5,15 @@ hands you one that it will.
 
 A charter exporting a background video has five ways to get it wrong and no way
 to find out except by spending an 80 MB upload on the answer. This is that
-answer, locally, in about a second.
+answer, locally, before the upload — the verdict in about a second, and the
+file that fixes it in as long as an encode takes.
+
+## Get it
+
+[**Releases**](../../releases) — one `.exe`, nothing to install, no runtime to
+put on the machine first. The encoder is inside it. A `.sha256` sits beside each
+download because the executable is unsigned and you should be able to check you
+got what CI built.
 
 ## The rule it enforces is not its own
 
@@ -29,19 +37,46 @@ Building it this way paid for itself before it shipped: the port found a real
 ordering bug in the server's gate on 2026-08-20 (a 120 fps file with an audio
 track cost the charter two round trips), fixed in Euterpe.Web `70a9fa8f`.
 
-## What it does, in one paragraph
+## The verdict, and then the work
 
 `src/gate/` parses the MP4 box tree — no ffmpeg, no decoding, a few hundred
-bytes read out of the header — and produces five facts: codec, width, height,
-frame rate, whether there is an audio track. Those go through `check()` in the
-server's order and come out as one `Verdict`. If the verdict is `Ok` there is
-nothing to do. If it is not, the planner decides the cheapest treatment that
-makes it `Ok`: stripping an audio track is a **stream copy**, exact and free,
-and that is the whole fix for the great majority of files; only a wrong
-resolution, a wrong frame rate or an undecodable codec forces a re-encode.
-AV1 is then encoded as well, and **kept only if it comes back smaller** than
-the exact copy. Every output is re-read through the same `gate` that judged the
-input, and nothing is written that the server would refuse.
+bytes out of the header — and produces five facts: codec, width, height, frame
+rate, whether there is an audio track. Those go through `check()` in the
+server's order and come out as one `Verdict`. That is the second.
+
+Fixing it is two phases, split on a question that has nothing to do with
+tidiness: **is the answer knowable in advance?**
+
+**Phase A is everything that is decided.** Resolution, frame rate, codec, audio,
+length — each follows from the file and the limits, with no judgement and no
+search. It *executes* only what a stream copy can do, which is dropping the
+audio track and cutting the tail: exact, lossless, and seconds even on a 379 MB
+source. That is the whole fix for most files.
+
+**Phase B is the one thing that is not.** How much quality a video needs to fit
+in 80 MB depends on how compressible that particular footage turns out to be,
+and nothing short of encoding it will say. So it gets its own phase, its own
+screen, and it may run more than once. Measured on our own recipe, every +6 CRF
+multiplies the output by a steady 0.709 — so one measurement predicts the rest
+of the curve, and the search usually needs a quarter of one encode plus one real
+one. Everything that rewrites the picture happens here, in a single pass, because
+Press ships one encoder and a second AV1 generation costs ~190% for nothing.
+
+What the encode is *for* decides what it may cost, and there are four answers:
+rescue a file that is over the limit (the allowance is a budget, spend it),
+repair one that is broken but small (house quality, no budget), apply something
+the charter asked for (drop the request rather than gain weight), or beat the
+file on size (ship only if smaller). **Under all four the result is never
+heavier than what went in.**
+
+The charter decides two things and Press decides nothing on their behalf: where
+the video starts and ends, and — when the picture is neither 16:9 nor 16:10,
+which is what players are actually on — whether to crop to one. Both are offers.
+The gate has no opinion about shape, and moving somebody's opening against their
+music is damage nobody asked for.
+
+Every output is re-read through the same `gate` that judged the input, and
+nothing is written that the server would refuse.
 
 ## Why it does not use your GPU
 
@@ -122,3 +157,14 @@ uv run --project ../Euterpe.Web python tools/golden.py   # re-record the answers
 
 `vendor/ffmpeg.exe`, if present, is embedded. CI puts it there; a developer's
 checkout has none and uses whatever is on `PATH`.
+
+## Releasing
+
+Tag it. `v1.2.3` builds, tests against the shipped encoder, proves the binary
+still agrees with the gate, and publishes the exe and its checksum to Releases.
+
+The tag has to equal `Cargo.toml`'s version and CI refuses the release if it
+does not — before building, so a mismatch costs seconds rather than a wrong
+download. The binary reports that version in its header and quotes it in the
+crash dialog, so a release that misnames itself misnames itself to the one
+person who most needs it to be right.

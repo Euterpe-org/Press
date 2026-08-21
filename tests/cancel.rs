@@ -254,3 +254,86 @@ fn a_file_whose_only_problem_is_audio_is_deliverable_after_phase_a() {
         "with a deliverable file in hand, an encode only earns its place on size"
     );
 }
+
+/// Stop pressed DURING an encode, which is the only way it is ever pressed.
+///
+/// Every other test here cancels before the run starts, which short-circuits:
+/// the loop sees the flag on its first check and returns without ever spawning
+/// ffmpeg. That proves the flag is read. It does not prove the thing the button
+/// actually promises -- that a running encoder is killed, and that the half
+/// written MP4 it was in the middle of does not survive to be mistaken for a
+/// result.
+///
+/// So this one lets the encode genuinely start, waits for ffmpeg to report real
+/// progress, and only then asks it to stop.
+#[test]
+fn stopping_a_running_encode_leaves_nothing_half_written() {
+    let Some(ffmpeg) = ffmpeg() else { return };
+
+    let source = fixture("fps120.mp4");
+    let (facts, bytes) = facts_of(&source);
+    let work = Workspace::open().expect("a workspace");
+    let cancel = Cancel::new();
+
+    let settled = phase_a::run(
+        &ffmpeg,
+        &Job {
+            source: source.to_path_buf(),
+            bytes,
+            facts,
+            trim: Trim::default(),
+            crop: None,
+        },
+        &work,
+        &cancel,
+        |_| {},
+    );
+    let phase_a::Outcome::Settled(material) = settled else {
+        panic!("expected a material: {settled:?}");
+    };
+    let aim = phase_b::aim(&material.facts, material.bytes, &Request::default())
+        .expect("120 fps needs an encode");
+
+    // Cancelled from INSIDE the run, on a real progress report, so the encoder
+    // is provably alive and mid-file when it is asked to stop.
+    let saw_progress = std::cell::Cell::new(false);
+    let outcome = phase_b::run(
+        &ffmpeg,
+        &material,
+        aim,
+        &Request::default(),
+        &work,
+        &cancel,
+        |step| {
+            if let phase_b::Step::Encoding {
+                progress: Some(_), ..
+            } = step
+            {
+                saw_progress.set(true);
+                cancel.request();
+            }
+        },
+    );
+
+    assert!(
+        saw_progress.get(),
+        "the encode never reported progress, so nothing was actually interrupted"
+    );
+    assert!(
+        matches!(outcome, phase_b::Outcome::Cancelled),
+        "a stop is not a failure: {outcome:?}"
+    );
+
+    // The material is Phase A's and must survive; anything else in the
+    // workspace is a candidate that was being written when the stop landed.
+    let left: Vec<String> = std::fs::read_dir(work.dir())
+        .expect("the workspace should still be there")
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|name| !material.path().ends_with(name.as_str()))
+        .collect();
+    assert!(
+        left.is_empty(),
+        "a stopped encode left files behind, which look like results: {left:?}"
+    );
+}
