@@ -20,6 +20,8 @@ env:
   # The commit `v3.1.2` points at, checked after the clone. A tag can be moved
   # and a mirror can diverge; a hash can do neither.
   SVTAV1_COMMIT: "b33dcc56cc64fcb3b3569094af8ab1d0d81ab4c1"
+  DAV1D_VERSION: "1.5.4"
+  DAV1D_COMMIT: "54706fc6bc0cdecab7e9593974a4039cc038fca7"
 
 jobs:
   encoder:
@@ -36,7 +38,7 @@ jobs:
       - name: Cache key
         id: key
         shell: bash
-        run: echo "value=ffmpeg-${{ env.FFMPEG_VERSION }}-svt-${{ env.SVTAV1_VERSION }}-${{ hashFiles('.github/workflows/build.yml') }}" >> "$GITHUB_OUTPUT"
+        run: echo "value=ffmpeg-${{ env.FFMPEG_VERSION }}-svt-${{ env.SVTAV1_VERSION }}-dav1d-${{ env.DAV1D_VERSION }}-${{ hashFiles('.github/workflows/build.yml') }}" >> "$GITHUB_OUTPUT"
 
       - uses: actions/cache@v4
         id: cache
@@ -59,20 +61,49 @@ jobs:
             mingw-w64-x86_64-cmake
             mingw-w64-x86_64-ninja
             mingw-w64-x86_64-pkgconf
+            mingw-w64-x86_64-meson
 
-      # SVT-AV1 is the only external library in the build. dav1d is deliberately
-      # NOT included: the only thing Press decodes AV1 for is a 640-pixel
-      # viewfinder, where ffmpeg's own decoder is quick enough, and leaving it
-      # out removes a meson toolchain and several megabytes for no benefit the
-      # charter would ever see.
-      # Cloned from AOMediaCodec's own GitHub mirror rather than from the
-      # canonical GitLab, which answers this runner with HTTP 403 -- it is what
-      # failed the very first release rehearsal, at the first line of the first
-      # job, on a dependency nobody here controls.
+      # TWO external libraries, one for each direction.
       #
-      # A mirror is a trust decision, so it is not trusted: the checkout is held
-      # to the COMMIT the pinned tag stands for, and a mirror that ever diverged
-      # would stop the build rather than quietly build something else.
+      # SVT-AV1 encodes. dav1d DECODES, and it is not optional however much it
+      # looks it: ffmpeg's built-in `av1` decoder is HARDWARE-ACCELERATED ONLY.
+      # It lists itself in `-decoders` and then refuses every frame with "your
+      # platform doesn't support hardware accelerated AV1 decoding", so a build
+      # without dav1d cannot decode AV1 in software at all.
+      #
+      # It was left out on the reasoning that "ffmpeg's own decoder is quick
+      # enough for a 640-pixel viewfinder". There is no own decoder. What that
+      # shipped was a viewfinder that goes blank on an AV1 source -- including
+      # on the file Press itself just produced, which is what a charter dragging
+      # their own result back in to check would see.
+      #
+      # Both come from their projects' own GitHub mirrors rather than from the
+      # canonical GitLab hosts, which answer this runner with HTTP 403. That is
+      # what failed the very first release rehearsal, at the first line of the
+      # first job, on a dependency nobody here controls.
+      #
+      # A mirror is a trust decision, so neither is trusted: each checkout is
+      # held to the COMMIT its pinned tag stands for. A tag can be moved and a
+      # mirror can drift; this build would stop rather than quietly compile
+      # something else into an executable other people run.
+      - name: Build dav1d
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          set -eux
+          git clone --depth 1 --branch "$DAV1D_VERSION" https://github.com/videolan/dav1d.git /tmp/dav1d
+          got=$(git -C /tmp/dav1d rev-parse HEAD)
+          test "$got" = "$DAV1D_COMMIT" || {
+            echo "::error::dav1d $DAV1D_VERSION is $got here, expected $DAV1D_COMMIT"
+            exit 1
+          }
+          meson setup /tmp/dav1d/build /tmp/dav1d \
+            --prefix=/tmp/prefix \
+            --buildtype=release \
+            --default-library=static \
+            -Denable_tools=false \
+            -Denable_tests=false
+          ninja -C /tmp/dav1d/build install
+
       - name: Build SVT-AV1
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
@@ -118,8 +149,9 @@ jobs:
             --enable-small \
             --disable-ffplay \
             --disable-ffprobe \
+            --enable-libdav1d \
             --enable-libsvtav1 \
-            --enable-decoder=h264,hevc,vp8,vp9,mpeg4,av1,rawvideo \
+            --enable-decoder=h264,hevc,vp8,vp9,mpeg4,av1,libdav1d,rawvideo \
             --enable-parser=h264,hevc,vp8,vp9,mpeg4video,av1 \
             --enable-bsf=extract_extradata,h264_mp4toannexb,hevc_mp4toannexb,vp9_superframe,av1_frame_merge,av1_frame_split \
             --enable-demuxer=mov,matroska,avi,rawvideo \
@@ -144,10 +176,16 @@ jobs:
           ls -l vendor/ffmpeg.exe
           echo "### Encoder: $(du -h vendor/ffmpeg.exe | cut -f1)" >> "$GITHUB_STEP_SUMMARY"
 
-      # It has to actually do the two jobs it was built for. A configure flag
-      # dropped by accident produces an ffmpeg that starts, reports a version,
-      # and then cannot encode -- which would only surface when a charter
-      # pressed the button.
+      # It has to actually do the jobs it was built for, in BOTH directions. A
+      # configure flag dropped by accident produces an ffmpeg that starts,
+      # reports a version, lists the codec in `-decoders`, and then cannot
+      # decode a single frame of it.
+      #
+      # That is not hypothetical: this step used to encode AV1 and decode VP9,
+      # and never once decoded AV1. The gap is exactly the shape of the bug that
+      # got through it -- a viewfinder blank on every AV1 file, including the
+      # ones Press had just written. Round-tripping through the actual codec is
+      # the only check that would have caught it, so that is what it does now.
       - name: Prove it can do the work
         shell: bash
         run: |
@@ -157,9 +195,15 @@ jobs:
             -vf "scale=160:90:flags=lanczos,fps=60" \
             -c:v libsvtav1 -crf 32 -preset 6 -pix_fmt yuv420p \
             -an -movflags +faststart /tmp/probe.mp4
+          test -s /tmp/probe.mp4
+          # Decode what it just encoded. This is the round trip.
+          ./vendor/ffmpeg.exe -hide_banner -decoders | grep libdav1d
+          ./vendor/ffmpeg.exe -y -v error -i /tmp/probe.mp4 \
+            -an -sn -vf scale=160:90 -f rawvideo -pix_fmt rgba -frames:v 1 /tmp/av1.raw
+          test "$(stat -c%s /tmp/av1.raw)" = "$((160 * 90 * 4))"
+          # And one of the codecs Press exists to replace.
           ./vendor/ffmpeg.exe -y -v error -i tests/fixtures/vp9.mp4 \
             -an -sn -vf scale=160:90 -f rawvideo -pix_fmt rgba -frames:v 1 /tmp/frame.raw
-          test -s /tmp/probe.mp4
           test "$(stat -c%s /tmp/frame.raw)" = "$((160 * 90 * 4))"
 
       - uses: actions/upload-artifact@v4
