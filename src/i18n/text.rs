@@ -1723,4 +1723,39 @@ strings! {
         pt: "Falta o codificador nesta compilação, então nada pode ser processado.",
         ru: "В этой сборке нет кодировщика, обработать ничего нельзя.",
     }
+    // ── when Press itself is what broke ──────────────────────────────────────
+
+    BUG_HEADLINE {
+        en: "Press hit a problem and has to close.",
+        zh_hans: "Press 出了点问题，得关掉了。",
+        zh_hant: "Press 出了點問題，得關掉了。",
+        ja: "Press に問題が起き、終了します。",
+        ko: "Press에 문제가 생겨 종료합니다.",
+        de: "Press ist auf ein Problem gestoßen und muss schließen.",
+        es: "Press encontró un problema y tiene que cerrarse.",
+        fr: "Press a rencontré un problème et doit se fermer.",
+        hr: "Press je naišao na problem i mora se zatvoriti.",
+        hu: "A Press hibába ütközött, és be kell zárulnia.",
+        id: "Press mengalami masalah dan harus ditutup.",
+        nl: "Press liep tegen een probleem aan en moet sluiten.",
+        pt: "O Press encontrou um problema e precisa fechar.",
+        ru: "Press столкнулся с проблемой и должен закрыться.",
+    }
+
+    BUG_YOUR_FILE_IS_SAFE {
+        en: "Your video was not touched. Press never writes to the file you gave it, and everything it did write goes to a temporary folder it clears out by itself.",
+        zh_hans: "你的视频没有被动过。Press 从不写你交给它的那个文件，它写出来的东西都在一个会自己清理的临时目录里。",
+        zh_hant: "你的影片沒有被動過。Press 從不寫你交給它的那個檔案，它寫出來的東西都在一個會自己清理的暫存目錄裡。",
+        ja: "元の動画には触れていません。Press は渡されたファイルに書き込むことはなく、書き出したものはすべて自動で片付けられる一時フォルダーにあります。",
+        ko: "원본 영상은 건드리지 않았습니다. Press는 건네받은 파일에 쓰지 않으며, 만들어낸 것은 모두 스스로 정리하는 임시 폴더에 있습니다.",
+        de: "Dein Video wurde nicht angetastet. Press schreibt nie in die übergebene Datei, und alles Geschriebene liegt in einem temporären Ordner, den es selbst aufräumt.",
+        es: "Tu vídeo no fue tocado. Press nunca escribe en el archivo que le diste, y todo lo que escribió está en una carpeta temporal que limpia sola.",
+        fr: "Ta vidéo n'a pas été touchée. Press n'écrit jamais dans le fichier qu'on lui donne, et tout ce qu'il a écrit se trouve dans un dossier temporaire qu'il nettoie lui-même.",
+        hr: "Tvoj videozapis nije diran. Press nikad ne piše u datoteku koju je dobio, a sve što je zapisao nalazi se u privremenoj mapi koju sam čisti.",
+        hu: "A videódhoz nem nyúltunk. A Press soha nem ír a kapott fájlba, és amit létrehozott, az egy ideiglenes mappában van, amit magától kitakarít.",
+        id: "Videomu tidak disentuh. Press tidak pernah menulis ke berkas yang kamu berikan, dan semua yang ditulisnya ada di folder sementara yang dibersihkan sendiri.",
+        nl: "Je video is niet aangeraakt. Press schrijft nooit naar het bestand dat je geeft, en alles wat het wel schreef staat in een tijdelijke map die het zelf opruimt.",
+        pt: "O teu vídeo não foi tocado. O Press nunca escreve no ficheiro que recebeu, e tudo o que escreveu está numa pasta temporária que ele próprio limpa.",
+        ru: "Ваше видео не тронуто. Press никогда не пишет в переданный файл, а всё записанное лежит во временной папке, которую он сам вычищает.",
+    }
 }

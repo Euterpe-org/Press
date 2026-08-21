@@ -71,6 +71,16 @@ fn main() -> ExitCode {
 
 fn window(open: Option<PathBuf>) -> eframe::Result {
     let lang = Lang::from_system();
+    // Before anything that could break. A release build has no console, so
+    // without this a panic on THIS thread writes its explanation to a handle
+    // nobody owns and the window simply disappears.
+    //
+    // Only on this path, and only from the binary. `--check` and `--fix` run in
+    // a terminal that already shows the default hook's output, and a batch of a
+    // hundred files must not stop on a dialog nobody is there to close. A panic
+    // on a worker thread is not shown here at all -- the window survives it and
+    // says so on the drop screen, which is a better place to be told.
+    euterpe_press::bug::watch(move |said| last_words(lang, said));
     let ffmpeg = euterpe_press::encoder::resolve();
 
     // FIXED. Not resizable, not maximisable: the body is one canvas laid out
@@ -97,6 +107,25 @@ fn window(open: Option<PathBuf>) -> eframe::Result {
             Ok(Box::new(press))
         }),
     )
+}
+
+/// The window is unwinding out from under itself, so this is the last chance to
+/// say anything at all.
+///
+/// The first thing it says is the thing they will actually worry about. Press
+/// never writes to the file it was given -- every intermediate goes to a temp
+/// directory that sweeps itself -- and somebody watching their only export of a
+/// three-hour edit disappear needs to hear that before they hear anything else.
+fn last_words(lang: Lang, said: &str) {
+    rfd::MessageDialog::new()
+        .set_level(rfd::MessageLevel::Error)
+        .set_title(text::WINDOW_TITLE.get(lang))
+        .set_description(format!(
+            "{}\n\n{}\n\n{said}",
+            text::BUG_HEADLINE.get(lang),
+            text::BUG_YOUR_FILE_IS_SAFE.get(lang),
+        ))
+        .show();
 }
 
 /// Read-only: what would the server say?

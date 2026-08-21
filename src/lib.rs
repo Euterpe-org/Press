@@ -9,6 +9,7 @@
 //! planning scenarios -- rather than against a screenshot.
 
 pub mod app;
+pub mod bug;
 pub mod crop;
 pub mod elevation;
 pub mod encoder;

@@ -833,11 +833,16 @@ impl Press {
                     self.finish_phase_b(*outcome);
                     return;
                 }
-                // The worker vanished without a verdict. It cannot, but a window
-                // that spins forever on a broken invariant is worse than one that
-                // says so.
+                // The worker vanished without a verdict. The one way that
+                // happens is a panic on its thread, which leaves its reason with
+                // `bug` on the way out -- so the charter is told what actually
+                // broke instead of that something did. Without it this said
+                // "the worker stopped unexpectedly" and the real message went to
+                // a console a release build does not have.
                 Err(TryRecvError::Disconnected) => {
-                    self.give_up("the worker stopped unexpectedly");
+                    let reason = crate::bug::take()
+                        .unwrap_or_else(|| "the worker stopped unexpectedly".to_owned());
+                    self.give_up(&reason);
                     return;
                 }
                 Err(TryRecvError::Empty) => return,
